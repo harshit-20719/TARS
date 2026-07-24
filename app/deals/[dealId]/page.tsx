@@ -3,6 +3,9 @@ import { notFound } from "next/navigation";
 import { getDeal, getRecord } from "@/mock/data";
 import { progressOf, stepsFor } from "@/lib/steps";
 import { computeRollup } from "@/lib/rollup";
+import { scoreMap } from "@/lib/judgment";
+import { SlideProfile } from "@/components/SlideProfile";
+import { CaptureGrid } from "@/components/CaptureGrid";
 
 export default async function OverviewPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
@@ -59,6 +62,39 @@ export default async function OverviewPage({ params }: { params: Promise<{ dealI
           </span>
         </div>
       </div>
+
+      {(rec.scores.length > 0 || rec.slides.length > 0) && (
+        <div className="grid-2" style={{ marginBottom: 20 }}>
+          <div className="card">
+            <div className="card-head">
+              <h2>Judgment · 0–10</h2>
+              <div className="spacer" />
+              <span className="count">
+                {p.slides}/{p.totalSlides} set
+              </span>
+            </div>
+            <div className="card-body">
+              {rec.slides.length > 0 ? (
+                <SlideProfile slides={rec.slides} />
+              ) : (
+                <div className="empty">No slides authored yet.</div>
+              )}
+            </div>
+          </div>
+          <div className="card" style={{ marginTop: 0 }}>
+            <div className="card-head">
+              <h2>Capture · 1–5 &amp; hygiene</h2>
+              <div className="spacer" />
+              <span className="count">
+                {p.scored}/{p.total} scored
+              </span>
+            </div>
+            <div className="card-body" style={{ paddingTop: 14 }}>
+              <CaptureGrid scores={scoreMap(rec)} />
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="callout">
         <span className="co-badge">authorship</span>

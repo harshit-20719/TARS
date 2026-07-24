@@ -5,8 +5,9 @@ export function TopBar() {
   return (
     <header className="topbar">
       <Link href="/deals" className="brand" style={{ textDecoration: "none" }}>
-        <div className="brand-mark">T</div>
-        <div className="brand-name">TARS</div>
+        <span className="brand-name">
+          TARS<span className="brand-cursor" aria-hidden="true" />
+        </span>
         <span className="brand-sub">Conviction · L1</span>
       </Link>
       <div className="topbar-spacer" />

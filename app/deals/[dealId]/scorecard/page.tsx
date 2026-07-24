@@ -5,6 +5,8 @@ import { computeRollup } from "@/lib/rollup";
 import { scoreMap } from "@/lib/judgment";
 import { isIncomplete } from "@/lib/scoring";
 import { ScorePill, SlidePill } from "@/components/ui";
+import { FounderRadar } from "@/components/FounderRadar";
+import { SlideStrip, SlideAxis, PillarDots } from "@/components/SlideProfile";
 import { Icon } from "@/components/icons";
 
 export default async function ScorecardPage({ params }: { params: Promise<{ dealId: string }> }) {
@@ -74,6 +76,7 @@ export default async function ScorecardPage({ params }: { params: Promise<{ deal
             {roll.exceptionalCount}
             <span className="u">of {roll.totalPillars} · at L1 cap</span>
           </div>
+          <div style={{ marginTop: 8 }}><PillarDots slides={rec.slides} /></div>
         </div>
         <div className="rollup-stat">
           <div className="rk">At least one critical?</div>
@@ -104,6 +107,23 @@ export default async function ScorecardPage({ params }: { params: Promise<{ deal
         the framework (spec D1) — the scorecard reports facts and decides nothing.
       </div>
 
+      <div className="sc-block-title">Founder read</div>
+      <div className="card">
+        <div className="card-body" style={{ paddingTop: 16, display: "flex", gap: 28, alignItems: "center", flexWrap: "wrap" }}>
+          <FounderRadar scores={scores} />
+          {rec.founderTypeRead.primary && (
+            <div style={{ fontSize: 12.5, color: "var(--ink-2)", maxWidth: 400 }}>
+              <div className="ft-type">{rec.founderTypeRead.primary}</div>
+              <div className="ft-secondary" style={{ marginBottom: 6 }}>
+                Founder-track floor reads on {rec.founderTypeRead.floorDimension}
+              </div>
+              {rec.founderTypeRead.pmConfirmation}
+            </div>
+          )}
+        </div>
+        <div className="card-note">F&amp;T sub-scores (1–5) — the capture behind the Founder/s track, not the 0–10 slide.</div>
+      </div>
+
       <div className="sc-block-title">Judgment block</div>
       <div className="card">
         <div className="card-body flush">
@@ -114,7 +134,7 @@ export default async function ScorecardPage({ params }: { params: Promise<{ deal
                   <th>Pillar / track</th>
                   <th style={{ width: 92 }}>Type</th>
                   <th style={{ width: 64 }}>Slide</th>
-                  <th style={{ width: 92 }}>Provisional</th>
+                  <th style={{ width: 210 }}><SlideAxis /></th>
                   <th>Ceiling guard</th>
                 </tr>
               </thead>
@@ -134,7 +154,7 @@ export default async function ScorecardPage({ params }: { params: Promise<{ deal
                       <td>
                         {sl ? <SlidePill value={sl.value} /> : <span className="mut">—</span>}
                       </td>
-                      <td>{sl?.provisionalValue ? <span className="chip line mono">{sl.provisionalValue}</span> : <span className="mut">—</span>}</td>
+                      <td><SlideStrip slide={sl} labelProvisional /></td>
                       <td style={{ fontSize: 12, color: "var(--ink-2)" }}>{sl?.ceilingGuard}</td>
                     </tr>
                   );
@@ -148,7 +168,7 @@ export default async function ScorecardPage({ params }: { params: Promise<{ deal
                         <span className="chip line xs">track</span>
                       </td>
                       <td>{sl ? <SlidePill value={sl.value} /> : <span className="mut">—</span>}</td>
-                      <td>{sl?.provisionalValue ? <span className="chip line mono">{sl.provisionalValue}</span> : <span className="mut">—</span>}</td>
+                      <td><SlideStrip slide={sl} labelProvisional /></td>
                       <td style={{ fontSize: 12, color: "var(--ink-2)" }}>{sl?.ceilingGuard}</td>
                     </tr>
                   );

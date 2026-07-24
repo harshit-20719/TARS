@@ -3,6 +3,7 @@ import { getRecord } from "@/mock/data";
 import { PILLARS, TRACKS, L1_CAP } from "@/framework";
 import { scoreMap } from "@/lib/judgment";
 import { SlideCard } from "@/components/SlideCard";
+import { FounderRadar } from "@/components/FounderRadar";
 import { Icon } from "@/components/icons";
 
 export default async function JudgmentPage({ params }: { params: Promise<{ dealId: string }> }) {
@@ -28,8 +29,20 @@ export default async function JudgmentPage({ params }: { params: Promise<{ dealI
         </p>
       </div>
 
-      {hasFt && (
-        <div className="card" style={{ marginBottom: 20 }}>
+      <div className="grid-2" style={{ marginBottom: 20 }}>
+        <div className="card" style={{ marginTop: 0 }}>
+          <div className="card-head">
+            <h2>Founder read</h2>
+            <div className="spacer" />
+            <span className="count">F&amp;T sub-scores · 1–5</span>
+          </div>
+          <div className="card-body" style={{ paddingTop: 14 }}>
+            <FounderRadar scores={scores} />
+          </div>
+          <div className="card-note">The capture behind the Founder/s track — not the 0–10 slide.</div>
+        </div>
+        {hasFt && (
+        <div className="card" style={{ marginTop: 0 }}>
           <div className="card-head">
             <h2>Founder-type read</h2>
             <div className="spacer" />
@@ -55,7 +68,8 @@ export default async function JudgmentPage({ params }: { params: Promise<{ dealI
             {ft.pmConfirmation} · No go / conditional-go / no-go verdict at L1 (spec D3).
           </div>
         </div>
-      )}
+        )}
+      </div>
 
       {rec.slides.length === 0 && (
         <div className="callout neutral">

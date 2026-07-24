@@ -72,10 +72,6 @@ export function SlideCard({
           </div>
           <div className="meter-scale">
             <span>0</span>
-            <span>
-              banked {banked} · cap {L1_CAP}
-              {prov !== undefined ? ` · provisional ${prov}` : ""}
-            </span>
             <span>10</span>
           </div>
         </div>

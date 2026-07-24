@@ -30,7 +30,7 @@ Open the **Halten** deal for a fully populated record (transcript → drafts →
 | `framework/` | The framework as static typed config: six rubrics + anchors, seven pillars + three tracks (lens + rooted set), founder types, the L1 verification cap. Referenced by key. |
 | `mock/` | `types.ts` (the record types) and `data.ts` (fictional deals). Shapes mirror the Prisma models. |
 | `lib/` | Pure logic: score bands, the peak/weakest-link driver, the roll-up facts, per-step progress. |
-| `components/` | Shared UI — top bar, sidebar stepper, slide card, review board, score pills. |
+| `components/` | Shared UI — top bar, sidebar stepper, slide card, review board, score pills, and the viz (`SlideProfile` dot-plot for the 0–10 slides, `CaptureGrid` fingerprint for the 1–5/hygiene scores). |
 | `docs/` | The product spec (`docs/specs/…`) and the implementation plan (`docs/plans/…`). |
 
 ## For the backend (next)
@@ -45,4 +45,4 @@ The UI reads through `mock/data.ts` (`listDeals`, `getDeal`, `getRecord`). Repla
 
 ## Design
 
-White/black with a single orange accent, warm neutrals, system-sans UI with mono for all numeric data. Light and dark themes (OS preference, plus a toggle in the top bar).
+Modern mainframe: IBM Plex Mono leads (titles, labels, data) with IBM Plex Sans for prose, zero corner radius, hairline rules instead of shadows, warm neutrals with Biome's orange as the single accent. The signature element is the status line — an always-dark terminal bar rendering the open record's facts, ending with the framework's covenant (`NO TOTAL · NO VERDICT`). Light ("paper terminal") and dark ("phosphor") themes via OS preference plus a toggle in the top bar.
