@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getDeal, getRecord } from "@/mock/data";
+import { getDeal, getRecord } from "@/lib/data";
 import { stepsFor, progressOf } from "@/lib/steps";
 import { computeRollup } from "@/lib/rollup";
 import { Sidebar } from "@/components/Sidebar";
@@ -13,8 +13,7 @@ export default async function DealLayout({
   params: Promise<{ dealId: string }>;
 }) {
   const { dealId } = await params;
-  const deal = getDeal(dealId);
-  const rec = getRecord(dealId);
+  const [deal, rec] = await Promise.all([getDeal(dealId), getRecord(dealId)]);
   if (!deal || !rec) notFound();
 
   const steps = stepsFor(dealId, rec);

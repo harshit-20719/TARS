@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { listDeals, getRecord } from "@/mock/data";
+import { listDeals, getRecord } from "@/lib/data";
 import { progressOf } from "@/lib/steps";
 import { Icon } from "@/components/icons";
 import { StatusLine } from "@/components/StatusLine";
@@ -8,8 +8,13 @@ import { PillarDots } from "@/components/SlideProfile";
 import { scoreMap } from "@/lib/judgment";
 import { computeRollup } from "@/lib/rollup";
 
-export default function DealsPage() {
-  const deals = listDeals();
+export default async function DealsPage() {
+  const deals = await listDeals();
+  // Each row renders from its deal's record, so fetch them all up front
+  // rather than awaiting inside the map below.
+  const records = new Map(
+    await Promise.all(deals.map(async (d) => [d.id, await getRecord(d.id)] as const)),
+  );
   return (
     <main className="main">
       <div className="deals-wrap">
@@ -36,7 +41,7 @@ export default function DealsPage() {
         </div>
 
         {deals.map((d) => {
-          const rec = getRecord(d.id);
+          const rec = records.get(d.id);
           const p = rec ? progressOf(rec) : null;
           const roll = rec ? computeRollup(rec) : null;
           return (

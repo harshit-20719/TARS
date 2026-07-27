@@ -1,0 +1,331 @@
+// TARS — L1 (Conviction) deal record.
+//
+// These models mirror the record interfaces in mock/types.ts one-for-one. The
+// repository (lib/repo) is the only place allowed to see Prisma types; every
+// function there returns the plain record interfaces, so the locked front end
+// never learns that a database exists.
+//
+// Framework content — rubrics, sub-dimensions, anchors, pillars, tracks, the
+// verification cap — is NOT in here. It is static typed config under /framework
+// and is referenced by key (subDimensionKey, slideKey). Scores carry a
+// rubricVersion stamp so a later rubric edit stays traceable (spec D2).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- enums
+
+/// Which layer of the framework a fact was recorded at. L1 is Conviction.
+enum Layer {
+  L1
+  L2
+  L3
+  IC
+}
+
+/// A sub-dimension is scored either 1..5 (with an "NE" sentinel) or pass/fail.
+enum ScoreType {
+  scale
+  binary
+}
+
+enum ObservationStatus {
+  draft
+  accepted
+  edited
+  rejected
+}
+
+/// Where a claim came from. Hyphenated on the wire to match the record type.
+enum OriginTag {
+  founderVolunteered              @map("founder-volunteered")
+  founderConfirmedAfterPmFraming  @map("founder-confirmed-after-PM-framing")
+  machineInferred                 @map("machine-inferred")
+}
+
+/// At L1 the ledger opens at "claimed" only; validated/refuted are L2.
+enum ClaimStatus {
+  claimed
+  validated
+  refuted
+}
+
+/// How a slide reads its rooted sub-dimensions.
+enum Lens {
+  peak
+  weakestLink @map("weakest-link")
+}
+
+/// PM authors the record. PARTNER reads it. ADMIN also manages users.
+enum Role {
+  PM
+  PARTNER
+  ADMIN
+}
+
+// ---------------------------------------------------------------- record
+
+model Deal {
+  id       String   @id
+  company  String
+  oneLiner String
+  founders String
+  /// Display name of the owning PM, kept because the record contract is a string.
+  ownerPm  String
+  opened   DateTime
+  layer    Layer    @default(L1)
+
+  ownerId String?
+  owner   User?   @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  calls           Call[]
+  observations    Observation[]
+  claims          Claim[]
+  scores          SubDimensionScore[]
+  slides          Slide[]
+  founderTypeRead FounderTypeRead?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+}
+
+model Call {
+  id         String   @id @default(cuid())
+  dealId     String
+  deal       Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  number     Int
+  label      String
+  date       DateTime
+  transcript String
+  /// Set once the extraction service has drafted from this transcript.
+  extracted  Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([dealId, number])
+  @@index([dealId])
+}
+
+/// A verbatim excerpt the machine drafted and the PM ruled on. Never a score.
+model Observation {
+  id              String            @id @default(cuid())
+  dealId          String
+  deal            Deal              @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  callNumber      Int
+  rubricKey       String
+  subDimensionKey String
+  quote           String
+  speaker         String?
+  timestamp       String?
+  status          ObservationStatus @default(draft)
+  layer           Layer             @default(L1)
+
+  /// Who accepted / edited / rejected it, and when.
+  decidedById String?
+  decidedBy   User?     @relation("ObservationDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt   DateTime?
+
+  anchoredClaims Claim[]
+  citedBy        ScoreEvidence[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([dealId, subDimensionKey])
+  @@index([dealId, callNumber])
+  @@index([decidedById])
+}
+
+/// The claim ledger. At L1 every entry opens "claimed" — nothing is verified yet.
+model Claim {
+  id     String @id @default(cuid())
+  dealId String
+  deal   Deal   @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  text   String
+
+  originTag OriginTag
+  status    ClaimStatus @default(claimed)
+
+  /// The observation this claim is anchored to.
+  anchorObsId String
+  anchorObs   Observation @relation(fields: [anchorObsId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([dealId])
+  @@index([anchorObsId])
+}
+
+/// One PM-authored sub-dimension score, unique per deal + sub-dimension + layer.
+///
+/// The value is stored as text alongside its scoreType rather than in two nullable
+/// columns: it is a single union in the domain, and a CHECK constraint (added in
+/// the migration) keeps the pair honest at the database level. lib/domain/codec.ts
+/// is the only place that parses it.
+model SubDimensionScore {
+  id              String    @id @default(cuid())
+  dealId          String
+  deal            Deal      @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  subDimensionKey String
+  scoreType       ScoreType
+  /// "1".."5" | "NE" for scale rows; "pass" | "unv" | "fail" for binary rows.
+  value           String
+  /// e.g. a hygiene row that is flagged but not failed (advance-with-condition).
+  flag            Boolean   @default(false)
+  layer           Layer     @default(L1)
+
+  /// Which frozen rubric version this score was set against (spec D2).
+  rubricVersion String @default("v1")
+
+  authorId String?
+  author   User?   @relation("ScoreAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  evidence ScoreEvidence[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([dealId, subDimensionKey, layer])
+  @@index([dealId])
+  @@index([authorId])
+}
+
+/// Which observations a score cites as evidence. No evidence => incomplete (D7, soft).
+model ScoreEvidence {
+  scoreId       String
+  score         SubDimensionScore @relation(fields: [scoreId], references: [id], onDelete: Cascade)
+  observationId String
+  observation   Observation       @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([scoreId, observationId])
+  @@index([observationId])
+}
+
+/// A PM's 0..10 read on a pillar or track. Never an average, never copied upward.
+model Slide {
+  id       String @id @default(cuid())
+  dealId   String
+  deal     Deal   @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  /// Pillar or track key from /framework.
+  slideKey String
+
+  /// Banked read, capped at the L1 ceiling while claims are unverified.
+  value            Int
+  /// Optional higher read, e.g. 8 "if the claim verifies". May exceed the cap.
+  provisionalValue Int?
+  lens             Lens
+  /// Required one line naming which sub-dimension set the ceiling. The anti-vibe guard.
+  ceilingGuard     String
+  layer            Layer  @default(L1)
+
+  authorId String?
+  author   User?   @relation("SlideAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([dealId, slideKey, layer])
+  @@index([dealId])
+  @@index([authorId])
+}
+
+/// The founder-type read. Context for the Founder/s track floor — not a verdict.
+model FounderTypeRead {
+  id     String @id @default(cuid())
+  dealId String @unique
+  deal   Deal   @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  primary        String
+  secondary      String?
+  profile        String
+  floorDimension String
+  /// The PM's one-line confirmation or override.
+  pmConfirmation String
+
+  authorId String?
+  author   User?   @relation("FounderReadAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([authorId])
+}
+
+// ------------------------------------------------------------------ auth
+// Auth.js v5 with the Prisma adapter. Sessions are JWT-strategy (required by the
+// dev credentials provider), so the Session model is kept for adapter
+// completeness and to leave a switch to database sessions open.
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  role          Role      @default(PM)
+  /// Only set for the dev-only credentials provider. Never used in production.
+  passwordHash  String?
+
+  accounts Account[]
+  sessions Session[]
+
+  ownedDeals           Deal[]              @relation("DealOwner")
+  authoredScores       SubDimensionScore[] @relation("ScoreAuthor")
+  authoredSlides       Slide[]             @relation("SlideAuthor")
+  authoredFounderReads FounderTypeRead[]   @relation("FounderReadAuthor")
+  observationDecisions Observation[]       @relation("ObservationDecider")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}

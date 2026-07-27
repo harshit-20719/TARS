@@ -1,12 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getDeal, getRecord } from "@/mock/data";
+import { getDeal, getRecord } from "@/lib/data";
 import { Icon } from "@/components/icons";
 
 export default async function TranscriptPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
-  const deal = getDeal(dealId);
-  const rec = getRecord(dealId);
+  const [deal, rec] = await Promise.all([getDeal(dealId), getRecord(dealId)]);
   if (!deal || !rec) notFound();
 
   return (

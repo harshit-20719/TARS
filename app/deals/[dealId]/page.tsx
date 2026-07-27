@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getDeal, getRecord } from "@/mock/data";
+import { getDeal, getRecord } from "@/lib/data";
 import { progressOf, stepsFor } from "@/lib/steps";
 import { computeRollup } from "@/lib/rollup";
 import { scoreMap } from "@/lib/judgment";
@@ -9,8 +9,7 @@ import { CaptureGrid } from "@/components/CaptureGrid";
 
 export default async function OverviewPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
-  const deal = getDeal(dealId);
-  const rec = getRecord(dealId);
+  const [deal, rec] = await Promise.all([getDeal(dealId), getRecord(dealId)]);
   if (!deal || !rec) notFound();
 
   const p = progressOf(rec);

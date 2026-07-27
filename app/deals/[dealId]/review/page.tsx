@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getRecord } from "@/mock/data";
+import { getRecord } from "@/lib/data";
 import { ReviewBoard } from "@/components/ReviewBoard";
 
 const ORIGIN_CLASS: Record<string, string> = {
@@ -10,7 +10,7 @@ const ORIGIN_CLASS: Record<string, string> = {
 
 export default async function ReviewPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
-  const rec = getRecord(dealId);
+  const rec = await getRecord(dealId);
   if (!rec) notFound();
 
   const counts = {

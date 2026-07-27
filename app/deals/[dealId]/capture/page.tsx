@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getRecord } from "@/mock/data";
+import { getRecord } from "@/lib/data";
 import { RUBRICS, type ScaleAnchors, type BinaryAnchors } from "@/framework";
 import { scoreMap } from "@/lib/judgment";
 import { ScorePill } from "@/components/ui";
@@ -7,7 +7,7 @@ import { Icon } from "@/components/icons";
 
 export default async function CapturePage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
-  const rec = getRecord(dealId);
+  const rec = await getRecord(dealId);
   if (!rec) notFound();
 
   const scores = scoreMap(rec);
