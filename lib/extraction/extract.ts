@@ -73,6 +73,60 @@ export class ExtractionError extends Error {
 }
 
 /**
+ * Turn a failure from the Anthropic API into something a PM can act on.
+ *
+ * This exists because of how lib/actions.ts handles errors: it converts the typed
+ * domain failures into values and deliberately rethrows everything else, so an
+ * unrecognised error escapes the server action and React renders the generic
+ * "an error occurred in the Server Components render" with the message stripped.
+ * Every SDK error was in that second group — which meant the failures you
+ * actually hit on a first real run (a mistyped key, a wrong EXTRACTION_MODEL, an
+ * empty credit balance, a rate limit) all surfaced as the one error that says
+ * nothing at all.
+ *
+ * The API's own explanation is passed through. It names the parameter or the
+ * billing state, which is the part worth reading, and it never contains the key.
+ */
+export function describeApiFailure(e: unknown): string {
+  const err = e as {
+    status?: number;
+    requestID?: string;
+    error?: { error?: { message?: string; type?: string } };
+    message?: string;
+  };
+  const detail = err?.error?.error?.message ?? "";
+  const said = detail ? ` The API said: ${detail}` : "";
+  const ref = err?.requestID ? ` (request ${err.requestID})` : "";
+
+  switch (err?.status) {
+    case 401:
+      return `the ANTHROPIC_API_KEY is not valid, so no drafts were written.${said}`;
+    case 403:
+      return `that API key is not permitted to use this model.${said}`;
+    case 404:
+      return (
+        `there is no model by that name — check EXTRACTION_MODEL, or unset it to ` +
+        `fall back to ${DEFAULT_EXTRACTION_MODEL}.${said}`
+      );
+    case 400:
+      // Where a bad parameter and an exhausted credit balance both land.
+      return `the API rejected the request.${said}${ref}`;
+    case 413:
+      return "the transcript is too large for one request; split it across two calls.";
+    case 429:
+      return `rate limited — the transcript is saved, so try extraction again in a moment.${said}`;
+    default:
+      break;
+  }
+  if (typeof err?.status === "number" && err.status >= 500) {
+    return `the API is unavailable right now — the transcript is saved, so try again.${ref}`;
+  }
+  // No status: a connection failure, or something the SDK threw before sending.
+  const raw = err?.message ? ` ${err.message}` : "";
+  return `could not reach the API, so no drafts were written.${raw}`;
+}
+
+/**
  * The slice of the Anthropic client this service uses. Narrow on purpose so a
  * test stub is a few lines rather than a mock of the whole SDK.
  */
@@ -162,8 +216,9 @@ export async function extractFromTranscript(
   const model = deps.model ?? (process.env.EXTRACTION_MODEL || DEFAULT_EXTRACTION_MODEL);
 
   const { thinking, effort } = thinkingConfigFor(model);
-
-  const response = await client.messages.parse({
+  // Built outside the try so a schema problem here stays a programmer error
+  // rather than being reported as an API failure.
+  const params = {
     model,
     // Under Haiku 4.5's 64k output ceiling, and comfortably above the pre-4.6
     // thinking budget it has to exceed.
@@ -176,7 +231,17 @@ export async function extractFromTranscript(
       format: zodOutputFormat(ExtractionOutputSchema),
     },
     messages: [{ role: "user", content: buildExtractionUserMessage(input) }],
-  });
+  };
+
+  let response: Awaited<ReturnType<ExtractionClient["messages"]["parse"]>>;
+  try {
+    response = await client.messages.parse(params);
+  } catch (e) {
+    // The one statement in this block is the API call, so everything from it is
+    // an extraction failure — reported as a value the form can render instead of
+    // escaping as an unhandled error.
+    throw new ExtractionError(describeApiFailure(e));
+  }
 
   // Check the refusal before reading content: on a refusal the content is empty
   // or partial, and reading it as a result would silently persist nothing while

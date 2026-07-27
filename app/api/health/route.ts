@@ -19,6 +19,7 @@
 import { db } from "@/lib/db";
 import { adminEmails } from "@/lib/adminEmails";
 import { ALLOWED_EMAIL_DOMAIN } from "@/lib/auth.config";
+import { DEFAULT_EXTRACTION_MODEL, thinkingConfigFor } from "@/lib/extraction/extract";
 
 // Never prerender or cache — the whole point is the live state of this instance.
 export const dynamic = "force-dynamic";
@@ -106,6 +107,16 @@ export async function GET() {
       canSignIn,
       ...(missing.length ? { missing } : {}),
       extractionEnabled: env.ANTHROPIC_API_KEY,
+      /**
+       * Which model extraction will actually use, and how the request will be
+       * shaped for it. A public model id, not a secret — and the pair answers the
+       * two questions a failing extraction raises: did EXTRACTION_MODEL take, and
+       * is this build sending that model's generation the parameters it accepts?
+       */
+      extractionModel: process.env.EXTRACTION_MODEL?.trim() || DEFAULT_EXTRACTION_MODEL,
+      extractionRequestShape: Object.keys(
+        thinkingConfigFor(process.env.EXTRACTION_MODEL?.trim() || DEFAULT_EXTRACTION_MODEL),
+      ).sort(),
     },
     { status: 200 },
   );

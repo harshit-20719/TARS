@@ -5,6 +5,7 @@ import {
   extractFromTranscript,
   isVerbatim,
   normaliseForComparison,
+  describeApiFailure,
   thinkingConfigFor,
   verifyDrafts,
   type ExtractionClient,
@@ -301,5 +302,59 @@ describe("thinking config per model generation", () => {
     for (const params of seen) {
       expect((params.output_config as Record<string, unknown>).format).toBeTruthy();
     }
+  });
+});
+
+describe("API failures are reported, not thrown past the action layer", () => {
+  /**
+   * lib/actions.ts converts typed domain errors into values and rethrows the
+   * rest, so an error it does not recognise escapes the server action and React
+   * renders the generic "an error occurred in the Server Components render" with
+   * the message stripped. Every one of these used to land there — which meant the
+   * failures a first real run actually hits produced the one error that says
+   * nothing. They must all arrive as ExtractionError.
+   */
+  const failing = (thrown: unknown): ExtractionClient => ({
+    messages: { parse: async () => { throw thrown; } },
+  });
+
+  const cases: [string, unknown, RegExp][] = [
+    ["a bad key", { status: 401, error: { error: { message: "invalid x-api-key" } } }, /ANTHROPIC_API_KEY is not valid/],
+    ["no credit", { status: 400, error: { error: { message: "Your credit balance is too low" } } }, /credit balance is too low/],
+    ["an unknown model", { status: 404, error: { error: { message: "model: nope" } } }, /check EXTRACTION_MODEL/],
+    ["a forbidden key", { status: 403, error: {} }, /not permitted/],
+    ["too large a transcript", { status: 413, error: {} }, /too large/],
+    ["a rate limit", { status: 429, error: {} }, /rate limited/],
+    ["an outage", { status: 529, error: {} }, /unavailable/],
+    ["a dropped connection", { message: "fetch failed" }, /could not reach the API/],
+  ];
+
+  it.each(cases)("reports %s as an ExtractionError", async (_label, thrown, expected) => {
+    await expect(
+      extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client: failing(thrown) }),
+    ).rejects.toThrow(ExtractionError);
+    await expect(
+      extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client: failing(thrown) }),
+    ).rejects.toThrow(expected);
+  });
+
+  it("never puts the key in the message", () => {
+    // The API's own text is passed through, so this asserts the shape it can take.
+    const message = describeApiFailure({
+      status: 401,
+      error: { error: { message: "invalid x-api-key" } },
+    });
+    expect(message).not.toMatch(/sk-ant/);
+  });
+
+  it("says the transcript survived on the retryable failures", () => {
+    // A PM who just pasted 40 minutes of transcript needs to know it is not lost.
+    for (const status of [429, 500, 529]) {
+      expect(describeApiFailure({ status, error: {} }), String(status)).toMatch(/saved/);
+    }
+  });
+
+  it("passes the request id through where the API gives one", () => {
+    expect(describeApiFailure({ status: 400, requestID: "req_abc", error: {} })).toContain("req_abc");
   });
 });
