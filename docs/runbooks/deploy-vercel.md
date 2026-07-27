@@ -58,17 +58,46 @@ stage 3.
 The app needs Postgres. Vercel can create one and wire it up for you.
 
 1. In your project, click the **Storage** tab.
-2. Click **Create Database** → choose **Postgres** → **Continue**.
-3. Accept the default name and region — pick the region closest to you.
+2. Click **Create Database**. Vercel offers a few Postgres options — **Prisma
+   Postgres** is the right one for this app, and is what these instructions
+   assume. (Neon also works; see the note at the end of this stage.)
+3. Accept the default name, and pick the region closest to you.
 4. Click **Create**.
-5. When it asks which project to connect it to, choose **TARS**, with all three
+5. When asked which project to connect it to, choose **TARS**, with all three
    environments (Production, Preview, Development) ticked.
 
-Vercel now sets `DATABASE_URL` for you automatically. You never see or copy the
-password.
+### Confirm the variable name — do not skip this
 
-**How to know it worked:** go to **Settings** → **Environment Variables** and
-confirm a `DATABASE_URL` row exists.
+Go to **Settings** → **Environment Variables** and look for **`DATABASE_URL`**.
+Its value will start with `prisma+postgres://`.
+
+Depending on which version of the integration you get, Vercel sometimes names it
+**`PRISMA_DATABASE_URL`** or **`POSTGRES_URL`** instead. The app reads
+`DATABASE_URL` specifically, so if that exact name is missing:
+
+1. Click the variable that does exist and copy its value.
+2. **Add New** → key `DATABASE_URL`, paste the value, all three environments
+   ticked → **Save**.
+
+That is the single most likely thing to go wrong in this stage, and the symptom
+is a build that fails complaining it cannot find `DATABASE_URL`.
+
+### Why Prisma Postgres needs no code changes
+
+Its connection string uses a `prisma+postgres://` scheme that goes through
+Prisma's own proxy rather than a direct database socket. Both halves of this app
+already understand it: the migration step routes through
+`migrations.prisma-data.net` and the running app through
+`accelerate.prisma-data.net`. Nothing to install, no schema change.
+
+It also pools connections for you, which is the thing that usually bites a
+serverless app talking to Postgres — so you can ignore any advice about
+connection limits or `pgbouncer=true`. That applies to raw Neon setups, not this
+one.
+
+> **If you chose Neon instead**, everything else in this guide is identical; you
+> just get a plain `postgres://` URL, and connection pooling is your problem
+> rather than Prisma's.
 
 ---
 
@@ -170,8 +199,9 @@ to sign in with any `@biome.in` account gets the PM role automatically.
 
 | What you see | What it means | Fix |
 |---|---|---|
-| Build fails, mentions `DATABASE_URL` | No database attached yet | Stage 3 |
-| Build fails, mentions `prisma migrate` | Database attached but unreachable | Check Storage tab shows it connected to this project |
+| Build fails, mentions `DATABASE_URL` | No database yet, **or** the integration named the variable something else | Stage 3, including the "Confirm the variable name" step |
+| Build fails, mentions `prisma migrate` or `P1001` | Database attached but unreachable | Check the Storage tab shows it connected to *this* project, and that `DATABASE_URL` is set for Production |
+| `Environment variable not found: DATABASE_URL` | The variable exists under a different name | Copy its value into a new variable named exactly `DATABASE_URL` |
 | Sign-in page shows no Google button | Google variables missing or not yet built | Recheck 5b spelling, then redeploy (5c) |
 | `redirect_uri_mismatch` from Google | The redirect URI doesn't match your domain | Stage 4b step 4 — it must be `https://<domain>/api/auth/callback/google` exactly |
 | Signed in, then immediately signed out | `AUTH_SECRET` missing or changed | Recheck 5b, redeploy |
