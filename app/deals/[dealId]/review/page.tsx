@@ -31,12 +31,7 @@ export default async function ReviewPage({ params }: { params: Promise<{ dealId:
         </p>
       </div>
 
-      {rec.observations.length === 0 ? (
-        <div className="card">
-          <div className="empty">No drafts yet. Run extraction on a transcript to populate observations and claims.</div>
-        </div>
-      ) : (
-        <>
+      <>
           <div className="summary" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))" }}>
             <div className="cell">
               <span className="k">Drafted</span>
@@ -65,7 +60,7 @@ export default async function ReviewPage({ params }: { params: Promise<{ dealId:
           </div>
 
           <div className="grid-2">
-            <ReviewBoard observations={rec.observations} />
+            <ReviewBoard dealId={dealId} observations={rec.observations} />
 
             <div>
               <div className="sc-block-title" style={{ marginTop: 0 }}>
@@ -106,8 +101,7 @@ export default async function ReviewPage({ params }: { params: Promise<{ dealId:
               </div>
             </div>
           </div>
-        </>
-      )}
+      </>
     </div>
   );
 }

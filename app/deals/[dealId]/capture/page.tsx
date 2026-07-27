@@ -3,6 +3,7 @@ import { getRecord } from "@/lib/data";
 import { RUBRICS, type ScaleAnchors, type BinaryAnchors } from "@/framework";
 import { scoreMap } from "@/lib/judgment";
 import { ScorePill } from "@/components/ui";
+import { ScoreControl } from "@/components/authoring/ScoreControl";
 import { Icon } from "@/components/icons";
 
 export default async function CapturePage({ params }: { params: Promise<{ dealId: string }> }) {
@@ -11,7 +12,20 @@ export default async function CapturePage({ params }: { params: Promise<{ dealId
   if (!rec) notFound();
 
   const scores = scoreMap(rec);
-  const obsById = new Map(rec.observations.map((o) => [o.id, o]));
+
+  /**
+   * Candidate evidence, grouped by the row it was filed under. A PM cites the
+   * observations that speak to the row they are scoring; offering all of a deal's
+   * observations on every one of forty-one rows would make the right answer harder
+   * to find, not easier. Rejected drafts are left out — the PM already refused them.
+   */
+  const obsBySub = new Map<string, typeof rec.observations>();
+  for (const o of rec.observations) {
+    if (o.status === "rejected") continue;
+    const list = obsBySub.get(o.subDimensionKey);
+    if (list) list.push(o);
+    else obsBySub.set(o.subDimensionKey, [o]);
+  }
 
   return (
     <div className="page">
@@ -69,9 +83,9 @@ export default async function CapturePage({ params }: { params: Promise<{ dealId
                   <thead>
                     <tr>
                       <th style={{ width: "32%" }}>Sub-dimension</th>
-                      <th>Anchors</th>
-                      <th style={{ width: 72 }}>Score</th>
-                      <th style={{ width: "26%" }}>Evidence</th>
+                      <th style={{ width: "26%" }}>Anchors</th>
+                      <th style={{ width: 56 }}>Score</th>
+                      <th style={{ width: "27%" }}>You author this</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -126,39 +140,14 @@ export default async function CapturePage({ params }: { params: Promise<{ dealId
                           </td>
                           <td>
                             <ScorePill score={sc} />
-                            {sc?.flag && (
-                              <div style={{ marginTop: 4 }}>
-                                <span className="chip warn xs">
-                                  <span className="dot" />
-                                  flagged
-                                </span>
-                              </div>
-                            )}
                           </td>
                           <td>
-                            {sc && sc.evidenceObsIds.length > 0 ? (
-                              <div className="ev-list">
-                                {sc.evidenceObsIds.map((id) => {
-                                  const o = obsById.get(id);
-                                  return o ? (
-                                    <span className="ev" key={id}>
-                                      <span className="q">
-                                        {o.quote.slice(0, 62)}
-                                        {o.quote.length > 62 ? "…" : ""}
-                                      </span>
-                                    </span>
-                                  ) : null;
-                                })}
-                              </div>
-                            ) : sc ? (
-                              <span className="ev-missing">
-                                <Icon name="alert" className="i sm" /> no evidence — incomplete
-                              </span>
-                            ) : (
-                              <span className="mut" style={{ fontSize: 12 }}>
-                                —
-                              </span>
-                            )}
+                            <ScoreControl
+                              dealId={dealId}
+                              sub={s}
+                              score={sc}
+                              candidates={obsBySub.get(s.key) ?? []}
+                            />
                           </td>
                         </tr>
                       );

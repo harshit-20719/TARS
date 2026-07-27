@@ -6,6 +6,8 @@ const PATHS: Record<string, ReactNode> = {
   arrow: <path d="M15 18l-6-6 6-6" />,
   play: <path d="M8 5v14l11-7z" fill="currentColor" stroke="none" />,
   flag: <path d="M4 21V4M4 4h11l-2 4 2 4H4" />,
+  plus: <path d="M12 5v14M5 12h14" />,
+  trash: <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />,
   alert: <path d="M12 9v4M12 17h.01M10.3 3.9 2.6 18a1.5 1.5 0 0 0 1.3 2.2h16.2a1.5 1.5 0 0 0 1.3-2.2L13.7 3.9a1.5 1.5 0 0 0-2.6 0z" />,
   ok: (
     <>

@@ -1,9 +1,12 @@
 import { notFound } from "next/navigation";
 import { getRecord } from "@/lib/data";
-import { PILLARS, TRACKS, L1_CAP } from "@/framework";
-import { scoreMap } from "@/lib/judgment";
+import { PILLARS, TRACKS, L1_CAP, subByKey, type Pillar, type Track } from "@/framework";
 import { SlideCard } from "@/components/SlideCard";
+import { SlideForm } from "@/components/authoring/SlideForm";
+import { FounderTypeForm } from "@/components/authoring/FounderTypeForm";
 import { FounderRadar } from "@/components/FounderRadar";
+import { driverRootKey, scoreMap } from "@/lib/judgment";
+import { scoreLabel } from "@/lib/scoring";
 import { Icon } from "@/components/icons";
 
 export default async function JudgmentPage({ params }: { params: Promise<{ dealId: string }> }) {
@@ -14,8 +17,22 @@ export default async function JudgmentPage({ params }: { params: Promise<{ dealI
   const scores = scoreMap(rec);
   const slideBy = new Map(rec.slides.map((s) => [s.slideKey, s]));
   const ft = rec.founderTypeRead;
-  const hasFt = ft.primary !== "";
   const isDraft = ft.pmConfirmation.startsWith("Draft");
+
+  /**
+   * A first line for the ceiling guard, naming the rooted row that currently sets
+   * the ceiling under this slide's lens. Offered, never filled in: the guard is the
+   * anti-vibe rule, and a sentence the app wrote is not the PM's reasoning. It
+   * appears as a "use suggested guard" button they have to press.
+   */
+  function suggestGuard(def: Pillar | Track): string | undefined {
+    const driver = driverRootKey(def.lens, def.rooted.map((r) => r.subKey), scores);
+    if (!driver) return undefined;
+    const sub = subByKey(driver);
+    if (!sub) return undefined;
+    const lens = def.lens === "peak" ? "Peak" : "Weakest-link";
+    return `${lens}: ${sub.label} (${scoreLabel(scores.get(driver))}) sets the ceiling.`;
+  }
 
   return (
     <div className="page">
@@ -41,34 +58,21 @@ export default async function JudgmentPage({ params }: { params: Promise<{ dealI
           </div>
           <div className="card-note">The capture behind the Founder/s track — not the 0–10 slide.</div>
         </div>
-        {hasFt && (
         <div className="card" style={{ marginTop: 0 }}>
           <div className="card-head">
             <h2>Founder-type read</h2>
             <div className="spacer" />
             <span className="authorship pm">
-              <Icon name="dot" className="i sm" /> {isDraft ? "PM-draft" : "PM-confirmed"}
+              <Icon name="dot" className="i sm" />{" "}
+              {ft.primary ? (isDraft ? "PM-draft" : "PM-confirmed") : "not read yet"}
             </span>
           </div>
-          <div className="ft-read">
-            <div className="ft-cell">
-              <div className="k">Type (machine-drafted, PM-confirmed)</div>
-              <div className="ft-type">{ft.primary}</div>
-              {ft.secondary && <div className="ft-secondary">secondary · {ft.secondary}</div>}
-            </div>
-            <div className="ft-cell">
-              <div className="k">Founder-track floor dimension</div>
-              <div className="ft-type" style={{ fontSize: 14, color: "var(--accent-ink)" }}>
-                {ft.floorDimension}
-              </div>
-              <div className="ft-secondary">{ft.profile}</div>
-            </div>
-          </div>
+          <FounderTypeForm dealId={dealId} read={ft} />
           <div className="card-note">
-            {ft.pmConfirmation} · No go / conditional-go / no-go verdict at L1 (spec D3).
+            Context only. The type sets the Founder-track floor dimension and the expected-pillar profile — there is
+            no go / conditional-go / no-go verdict at L1 (spec D3).
           </div>
         </div>
-        )}
       </div>
 
       {rec.slides.length === 0 && (
@@ -82,12 +86,18 @@ export default async function JudgmentPage({ params }: { params: Promise<{ dealI
         Pillars of differentiation · 7
       </div>
       {PILLARS.map((p) => (
-        <SlideCard key={p.key} def={p} slide={slideBy.get(p.key)} scores={scores} kindLabel={p.kind} />
+        <div key={p.key}>
+          <SlideCard def={p} slide={slideBy.get(p.key)} scores={scores} kindLabel={p.kind} />
+          <SlideForm dealId={dealId} def={p} slide={slideBy.get(p.key)} suggestedGuard={suggestGuard(p)} />
+        </div>
       ))}
 
       <div className="sc-block-title">Tracks · 3</div>
       {TRACKS.map((t) => (
-        <SlideCard key={t.key} def={t} slide={slideBy.get(t.key)} scores={scores} kindLabel="track" />
+        <div key={t.key}>
+          <SlideCard def={t} slide={slideBy.get(t.key)} scores={scores} kindLabel="track" />
+          <SlideForm dealId={dealId} def={t} slide={slideBy.get(t.key)} suggestedGuard={suggestGuard(t)} />
+        </div>
       ))}
     </div>
   );

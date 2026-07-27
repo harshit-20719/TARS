@@ -7,6 +7,7 @@ import { CaptureStrip } from "@/components/CaptureGrid";
 import { PillarDots } from "@/components/SlideProfile";
 import { scoreMap } from "@/lib/judgment";
 import { computeRollup } from "@/lib/rollup";
+import { NewDealForm } from "@/components/authoring/NewDealForm";
 
 export default async function DealsPage() {
   const deals = await listDeals();
@@ -35,9 +36,7 @@ export default async function DealsPage() {
             <input placeholder="Search deals…" aria-label="Search deals" />
           </div>
           <div className="spacer" />
-          <span className="btn primary" aria-disabled="true" title="New-deal form is stubbed in this mock">
-            + New deal
-          </span>
+          <NewDealForm />
         </div>
 
         {deals.map((d) => {

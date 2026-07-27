@@ -6,6 +6,7 @@ import { computeRollup } from "@/lib/rollup";
 import { scoreMap } from "@/lib/judgment";
 import { SlideProfile } from "@/components/SlideProfile";
 import { CaptureGrid } from "@/components/CaptureGrid";
+import { DealHeaderForm } from "@/components/authoring/DealHeaderForm";
 
 export default async function OverviewPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
@@ -22,6 +23,7 @@ export default async function OverviewPage({ params }: { params: Promise<{ dealI
         <span className="eyebrow">{deal.founders}</span>
         <h1 className="page-title">{deal.company}</h1>
         <p className="page-lede">{deal.oneLiner}</p>
+        <DealHeaderForm deal={deal} />
       </div>
 
       <div className="summary">
@@ -57,7 +59,8 @@ export default async function OverviewPage({ params }: { params: Promise<{ dealI
             {roll.floorStatus === "fail" ? "Failed" : "Clear"}
           </span>
           <span className="sub">
-            {roll.flags.length} flag{roll.flags.length !== 1 ? "s" : ""}
+            {roll.flags.length + roll.mandatoryClears.length} flag
+            {roll.flags.length + roll.mandatoryClears.length !== 1 ? "s" : ""}
           </span>
         </div>
       </div>

@@ -3,27 +3,68 @@
 import { useState } from "react";
 import type { Observation } from "@/mock/types";
 import { RUBRICS, subByKey } from "@/framework";
+import { decideObservationAction } from "@/lib/actions";
+import { useAction } from "@/lib/useAction";
 
 /**
  * The PM curates the machine's drafts before they become evidence (R3).
- * Accept / edit / reject is local state here — it maps to a repository
- * mutation when the backend lands (plan U6).
+ *
+ * Accept / reject write straight through. "Re-map" exists because the commonest
+ * thing wrong with a draft is not the quote but the row it was filed under, and
+ * re-filing it is a smaller, truer edit than rejecting a good quote. The re-map
+ * list is the whole rubric tree, so the corrected key is always a real one — and
+ * the service records who decided and when either way.
+ *
+ * The quote itself is not editable here. It is a verbatim excerpt checked against
+ * the transcript before it was written; letting it be typed over would quietly
+ * turn a citation into a paraphrase.
  */
-export function ReviewBoard({ observations }: { observations: Observation[] }) {
-  const [obs, setObs] = useState<Observation[]>(observations);
-  const set = (id: string, status: Observation["status"]) =>
-    setObs((prev) => prev.map((o) => (o.id === id ? { ...o, status } : o)));
+export function ReviewBoard({
+  dealId,
+  observations,
+}: {
+  dealId: string;
+  observations: Observation[];
+}) {
+  const decide = useAction(decideObservationAction);
+  const [remapping, setRemapping] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  async function set(o: Observation, status: Observation["status"], subDimensionKey?: string) {
+    setBusyId(o.id);
+    const rubricKey = subDimensionKey
+      ? RUBRICS.find((r) => r.subs.some((s) => s.key === subDimensionKey))?.key
+      : undefined;
+    await decide.run(dealId, o.id, {
+      status,
+      ...(subDimensionKey ? { subDimensionKey, rubricKey } : {}),
+    });
+    setBusyId(null);
+    setRemapping(null);
+  }
 
   const groups = RUBRICS.map((r) => ({
     r,
-    items: obs.filter((o) => o.rubricKey === r.key),
+    items: observations.filter((o) => o.rubricKey === r.key),
   })).filter((g) => g.items.length > 0);
+
+  if (groups.length === 0) {
+    return (
+      <div className="card">
+        <div className="empty">
+          No observations drafted yet. Paste a transcript and run extraction, and the drafts land here for you to
+          accept, re-map, or reject.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
       <div className="sc-block-title" style={{ marginTop: 0 }}>
         Observations · by rubric
       </div>
+      {decide.error && <div className="ctl-err" style={{ marginBottom: 10 }}>{decide.error}</div>}
       {groups.map((g) => (
         <div key={g.r.key}>
           <div className="rg-head">
@@ -33,6 +74,7 @@ export function ReviewBoard({ observations }: { observations: Observation[] }) {
           </div>
           {g.items.map((o) => {
             const sub = subByKey(o.subDimensionKey);
+            const busy = busyId === o.id && decide.pending;
             return (
               <div key={o.id} className={`obs ${o.status === "rejected" ? "rejected" : ""}`}>
                 <div className="quote">{o.quote}</div>
@@ -49,7 +91,7 @@ export function ReviewBoard({ observations }: { observations: Observation[] }) {
                   {o.status === "edited" && (
                     <span className="chip warn">
                       <span className="dot" />
-                      edited
+                      re-mapped
                     </span>
                   )}
                   {o.status === "draft" && (
@@ -64,18 +106,56 @@ export function ReviewBoard({ observations }: { observations: Observation[] }) {
                       rejected
                     </span>
                   )}
+                  {busy && <span className="ctl-saving">saving…</span>}
                   <span className="obs-actions">
-                    <button className="btn sm ok" onClick={() => set(o.id, "accepted")}>
+                    <button
+                      className="btn sm ok"
+                      disabled={busy || o.status === "accepted"}
+                      onClick={() => set(o, "accepted")}
+                    >
                       Accept
                     </button>
-                    <button className="btn sm" onClick={() => set(o.id, "edited")}>
-                      Edit
+                    <button
+                      className="btn sm"
+                      disabled={busy}
+                      onClick={() => setRemapping(remapping === o.id ? null : o.id)}
+                    >
+                      Re-map
                     </button>
-                    <button className="btn sm danger" onClick={() => set(o.id, "rejected")}>
+                    <button
+                      className="btn sm danger"
+                      disabled={busy || o.status === "rejected"}
+                      onClick={() => set(o, "rejected")}
+                    >
                       Reject
                     </button>
                   </span>
                 </div>
+                {remapping === o.id && (
+                  <div className="ctl-row" style={{ marginTop: 10 }}>
+                    <span className="ctl-note">file under</span>
+                    <select
+                      className="inp"
+                      defaultValue={o.subDimensionKey}
+                      disabled={busy}
+                      style={{ flex: 1, minWidth: 240 }}
+                      onChange={(e) => set(o, "edited", e.target.value)}
+                    >
+                      {RUBRICS.map((r) => (
+                        <optgroup key={r.key} label={r.label}>
+                          {r.subs.map((s) => (
+                            <option key={s.key} value={s.key}>
+                              {r.key.toUpperCase()}-{s.index} · {s.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                    <button className="btn sm ghost" disabled={busy} onClick={() => setRemapping(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}

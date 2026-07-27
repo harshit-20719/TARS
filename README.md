@@ -25,7 +25,7 @@ Needs Postgres. Sign in with any seeded user (`pm@biome.in`, password `tars-dev`
 [`docs/runbooks/deploy-vercel.md`](docs/runbooks/deploy-vercel.md).
 
 ```bash
-npm test         # 112 tests, against a real Postgres test database
+npm test         # 158 tests, against a real Postgres test database
 npm run typecheck
 ```
 
@@ -40,7 +40,7 @@ Open the **Halten** deal for a fully populated record (transcript → drafts →
 | `mock/` | `types.ts` — **the record contract** every layer speaks. `data.ts` is now the seed fixture source, not the runtime data source. |
 | `prisma/` | Schema, migrations (including CHECK constraints), and the fixture seed. |
 | `lib/` | `data.ts` (the seam the UI reads), `repo/` (Prisma → record types), `domain/` (the codec and the framework's invariants), `services/` (the write side), `extraction/` (Claude drafting), `actions.ts` (server actions), auth and session. Plus the original pure view logic: score bands, the peak/weakest-link driver, roll-up facts, per-step progress. |
-| `components/` | Shared UI — top bar, sidebar stepper, slide card, review board, score pills, and the viz (`SlideProfile` dot-plot for the 0–10 slides, `CaptureGrid` fingerprint for the 1–5/hygiene scores). |
+| `components/` | Shared UI — top bar, sidebar stepper, slide card, review board, score pills, and the viz (`SlideProfile` dot-plot for the 0–10 slides, `CaptureGrid` fingerprint for the 1–5/hygiene scores). `authoring/` holds the write controls: the score picker, the slide form, the founder-type read, and the deal/transcript forms. |
 | `docs/` | The product spec (`docs/specs/…`) and the implementation plan (`docs/plans/…`). |
 
 ## How the backend holds the framework
