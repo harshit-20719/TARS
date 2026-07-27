@@ -29,9 +29,11 @@ Running the app costs nothing. One optional feature is metered.
 | **Anthropic API** — the extraction step only | **Metered.** No subscription; billed per token |
 
 **You can deploy and use the app with zero spend** by leaving
-`ANTHROPIC_API_KEY` unset. Everything works except the "run extraction" button,
-which returns a clear error rather than breaking the page. Add the key whenever
-you want the machine to draft observations.
+`ANTHROPIC_API_KEY` unset. With no key, the transcript page simply does not offer
+extraction — the buttons are absent rather than present-and-failing, and it says
+why. Transcripts still save, and you can score every row by hand. Add the key
+whenever you want the machine to draft observations, and the buttons appear on
+the next page load.
 
 When you do turn extraction on, a rough per-transcript cost — a 45-minute call,
 which is about 15k tokens in and 5k out:
@@ -302,7 +304,8 @@ role wiring without any UI for it.
 | `redirect_uri_mismatch` from Google | The redirect URI doesn't match your domain | Stage 4b step 4 — it must be `https://<domain>/api/auth/callback/google` exactly |
 | Signed in, then immediately signed out | `AUTH_SECRET` missing or changed | Recheck 5b, redeploy |
 | "Access blocked" from Google | Account isn't `@biome.in` | Sign in with a Biome account |
-| Pages load but extraction errors | `ANTHROPIC_API_KEY` missing | Add it (5b), redeploy |
+| No extraction button on the transcript page | `ANTHROPIC_API_KEY` unset — working as designed | Add it (5b) and redeploy; `/api/health` shows `extractionEnabled` |
+| Extraction runs but drops most quotes | The model paraphrased; unverifiable quotes are discarded on purpose | Normal on a lightly-punctuated transcript. Re-run, or paste a cleaner transcript |
 
 Build logs are the fastest diagnosis: **Deployments** → click the failed one →
 scroll the log for the first red line.
