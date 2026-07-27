@@ -35,6 +35,33 @@ export async function GET() {
     ANTHROPIC_API_KEY: present(process.env.ANTHROPIC_API_KEY),
   };
 
+  /**
+   * Shape checks on the Google credentials.
+   *
+   * A present-but-wrong value looks identical to a correct one through a boolean,
+   * and Google answers a malformed client id with "invalid_client / The OAuth
+   * client was not found" — which reads like the client was deleted rather than
+   * mistyped. The commonest cause is copying the id from the console's truncated
+   * list display ("6464…-pipg…") instead of using its copy button.
+   *
+   * Lengths and suffixes only. A Google client id is public by design — it is
+   * sent to the browser on every sign-in — but the secret is not, so that one is
+   * only ever checked for its prefix and length.
+   */
+  const clientId = process.env.AUTH_GOOGLE_ID?.trim() ?? "";
+  const clientSecret = process.env.AUTH_GOOGLE_SECRET?.trim() ?? "";
+  const googleCredentials = {
+    clientIdLength: clientId.length,
+    clientIdEndsCorrectly: clientId.endsWith(".apps.googleusercontent.com"),
+    clientIdLooksTruncated: clientId.length > 0 && clientId.length < 40,
+    secretLength: clientSecret.length,
+    secretStartsCorrectly: clientSecret.startsWith("GOCSPX-"),
+    // Catches a value pasted with surrounding quotes or a stray newline.
+    hasStrayWhitespaceOrQuotes:
+      /[\s"']/.test(process.env.AUTH_GOOGLE_ID ?? "") ||
+      /[\s"']/.test(process.env.AUTH_GOOGLE_SECRET ?? ""),
+  };
+
   let database: "reachable" | "unreachable" = "unreachable";
   let databaseError: string | undefined;
   let tables = false;
@@ -70,6 +97,7 @@ export async function GET() {
       // Surfaced because a sign-in that clears Google can still be refused here,
       // and the message Auth.js shows for that does not say which domain it wanted.
       allowedEmailDomain: ALLOWED_EMAIL_DOMAIN,
+      googleCredentials,
       expectedCallbackUrl: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : ""}/api/auth/callback/google`,
       adminEmailCount: adminEmails().length,
       database,
