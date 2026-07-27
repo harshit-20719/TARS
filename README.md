@@ -73,7 +73,7 @@ Backend plan: [`docs/plans/2026-07-27-002-backend-l1-plan.md`](docs/plans/2026-0
 
 ## Working-draft notes
 
-- **Rubric content** is a representative draft of **26** sub-dimensions transcribed to the framework's shape — not the frozen `rubric_v1`. The real Notion grid is 41 sub-dimensions with verbatim anchors; freeze it (spec **D2**) before the pilot. The keys, types, floors, and rooting are structural and stable; the anchor wording is placeholder. Every score row stores a `rubricVersion` so scores set against this draft stay traceable after the freeze.
+- **Rubric content** is `rubric_v1`: the full Notion grid, **41** sub-dimensions (7/7/7/7/7/6), with every label, "what it tests", rooting, and 1/3/5 anchor transcribed verbatim (spec **D2**). Ten rows form the hygiene floor — eight binary, plus **Ambition & exit-type fit** and **Cap-table health**, which are scored 1–5 and killed at 1. Notion's four row-scoped open questions ride on the rows they belong to and surface in the capture grid; `framework/rubrics.ts` carries all six in `OPEN_CALLS`. Every score row stores a `rubricVersion`, so scores survive the next revision traceably.
 - **No gate verdict.** The roll-up renders facts — exceptional pillars, critical-pillar count, floor breaches — and stops. The framework leaves G1 pending (spec **D1**), so the code does not invent one.
 - **Score history** is not versioned within L1 (spec **D11**); the layer stamp carries cross-layer history.
 - **Accent orange** (`--accent` in `app/globals.css`) is a placeholder for Biome's exact brand orange — one token, one swap.

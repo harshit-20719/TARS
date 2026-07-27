@@ -92,20 +92,21 @@ export default async function CapturePage({ params }: { params: Promise<{ dealId
                       return (
                         <tr key={s.key}>
                           <td>
-                            <div className="sub-label">{s.label}</div>
+                            <div className="sub-label">
+                              {r.key.toUpperCase()}-{s.index} · {s.label}
+                            </div>
+                            <div className="roots">{s.whatItTests}</div>
                             <div className="roots">
                               roots to · {s.rootsTo}
-                              {s.kill ? (
+                              {s.floor && (
                                 <>
                                   {" "}
-                                  <span className="chip bad xs">kill-floor</span>
+                                  <span className={`chip xs ${s.floor.weight === "kill" ? "bad" : "warn"}`}>
+                                    {s.floor.weight === "kill" ? "kill" : "flag"} at{" "}
+                                    {s.floor.breachAt === "fail" ? "Fail" : s.floor.breachAt}
+                                  </span>
                                 </>
-                              ) : s.floor ? (
-                                <>
-                                  {" "}
-                                  <span className="chip line xs">floor</span>
-                                </>
-                              ) : null}
+                              )}
                             </div>
                             {s.open && (
                               <div className="roots" style={{ color: "var(--warn)" }}>

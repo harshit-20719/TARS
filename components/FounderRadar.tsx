@@ -9,12 +9,15 @@ import { ScorePill } from "./ui";
  * beside the chart so the shape is a summary, not the measurement.
  */
 
+/** Short axis labels — the full Notion labels do not fit a 210px radar. */
 const SHORT: Record<string, string> = {
   "earned-insight": "Earned insight",
-  execution: "Execution",
-  "founder-narrative": "Narrative",
+  "learning-rate": "Learning rate",
+  "track-record": "Track record",
   coachability: "Coachability",
-  "cofounder-dynamics": "Co-founders",
+  "drive-resilience": "Drive",
+  communication: "Storytelling",
+  "ambition-fit": "Ambition",
 };
 
 const R = 74;

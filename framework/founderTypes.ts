@@ -34,7 +34,7 @@ export const FOUNDER_TYPES: FounderTypeDef[] = [
     key: "serial",
     label: "Serial entrepreneur",
     expects: ["GTM engine", "Founder-led storytelling"],
-    floorDimension: "execution",
+    floorDimension: "learning-rate",
     blurb: "Brings execution and narrative. The earned secret and foundational tech still have to be real.",
   },
 ];

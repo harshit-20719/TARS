@@ -68,10 +68,11 @@ export default async function DealsPage() {
                       <span className="dot" />
                       floor failed
                     </span>
-                  ) : roll && roll.flags.length > 0 ? (
+                  ) : roll && roll.flags.length + roll.mandatoryClears.length > 0 ? (
                     <span className="chip warn">
                       <span className="dot" />
-                      {roll.flags.length} flag{roll.flags.length !== 1 ? "s" : ""}
+                      {roll.flags.length + roll.mandatoryClears.length} flag
+                      {roll.flags.length + roll.mandatoryClears.length !== 1 ? "s" : ""}
                     </span>
                   ) : null}
                 </div>

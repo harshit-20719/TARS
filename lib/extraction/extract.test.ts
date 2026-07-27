@@ -8,7 +8,12 @@ import {
   verifyDrafts,
   type ExtractionClient,
 } from "./extract";
-import { ExtractionOutputSchema, type ExtractionOutput } from "./schema";
+import {
+  DraftClaimSchema,
+  DraftObservationSchema,
+  ExtractionOutputSchema,
+  type ExtractionOutput,
+} from "./schema";
 import { EXTRACTION_SYSTEM_PROMPT } from "./prompt";
 
 const TRANSCRIPT = `[00:02] Aparna: We spent four years inside mid-market bank operations.
@@ -213,7 +218,21 @@ describe("the output schema", () => {
   it("has nowhere to put a score", () => {
     // The authorship rule, enforced by the shape of the contract rather than by
     // asking the model nicely.
-    const json = JSON.stringify(ExtractionOutputSchema.shape);
-    expect(json).not.toMatch(/score|rating|value/i);
+    //
+    // Asserted on the field names, not on the serialized schema: the enum of
+    // sub-dimension keys legitimately contains "time-to-value", and a substring
+    // match on the whole blob would read that rubric row as a place to put a
+    // number.
+    const fields = [
+      ...Object.keys(ExtractionOutputSchema.shape),
+      ...Object.keys(DraftObservationSchema.shape),
+      ...Object.keys(DraftClaimSchema.shape),
+    ];
+    for (const f of fields) {
+      expect(f).not.toMatch(/score|rating|value|rank|grade/i);
+    }
+    // And nothing numeric anywhere — every leaf is a string or an enum of
+    // strings, so there is no field a number could be written into at all.
+    expect(JSON.stringify(ExtractionOutputSchema.shape)).not.toMatch(/"type":"(number|int)"/);
   });
 });

@@ -132,14 +132,14 @@ describe("extraction persistence", () => {
   const verbatim = {
     quote: "Our matcher runs continuously instead of as a nightly batch job.",
     rubricKey: "pt",
-    subDimensionKey: "defensibility",
+    subDimensionKey: "compounding-moat",
     speaker: "Rhea",
     timestamp: "00:06",
   };
   const paraphrased = {
     quote: "Their matcher runs all the time rather than nightly.",
     rubricKey: "pt",
-    subDimensionKey: "defensibility",
+    subDimensionKey: "compounding-moat",
     speaker: "Rhea",
     timestamp: "00:06",
   };
@@ -275,13 +275,13 @@ describe("observation review", () => {
 
     await decideObservation(pm, obs.id, {
       status: "edited",
-      subDimensionKey: "execution",
+      subDimensionKey: "learning-rate",
       rubricKey: "ft",
     });
 
     const after = await db.observation.findUniqueOrThrow({ where: { id: obs.id } });
     expect(after.status).toBe("edited");
-    expect(after.subDimensionKey).toBe("execution");
+    expect(after.subDimensionKey).toBe("learning-rate");
     expect(after.decidedById).toBe(pm.id);
     expect(after.decidedAt).toBeInstanceOf(Date);
   });
@@ -333,7 +333,7 @@ describe("scores", () => {
 
   it("takes the score type from the rubric, not the caller", async () => {
     const dealId = await newDeal("Type Test");
-    await setScore(pm, { dealId, subDimensionKey: "ip-boundary", value: "unv", flag: true });
+    await setScore(pm, { dealId, subDimensionKey: "ip-ownership", value: "unv", flag: true });
     const row = await db.subDimensionScore.findFirstOrThrow({ where: { dealId } });
     expect(row.scoreType).toBe("binary");
     expect(row.flag).toBe(true);
@@ -342,7 +342,7 @@ describe("scores", () => {
   it("refuses a 1–5 value on a binary row", async () => {
     const dealId = await newDeal("Mismatch Test");
     await expect(
-      setScore(pm, { dealId, subDimensionKey: "ip-boundary", value: 3 }),
+      setScore(pm, { dealId, subDimensionKey: "ip-ownership", value: 3 }),
     ).rejects.toThrow(RuleViolation);
   });
 

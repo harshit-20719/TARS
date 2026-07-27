@@ -147,21 +147,54 @@ export function assertSlide(input: SlideInput) {
 export interface FloorBreach {
   subDimensionKey: string;
   label: string;
+  /** The value that tripped the row, so a caller can show it without re-looking-up. */
+  value: ScoreValue;
+  /** What the framework attaches to this breach: a kill, or a mandatory-clear flag. */
+  weight: "kill" | "flag";
+  /** An unresolved framework call on this row, if it has one (spec D5). */
+  open?: string;
 }
 
 /**
- * Which binary hygiene floor rows have been failed.
+ * Which hygiene floor rows have been tripped.
  *
- * A fact, reported for rendering. The framework says a Fail drops the deal, but
- * it leaves the G1 thresholds pending (spec D1) — so this function names the
- * breaches and stops there. Turning a breach into a verdict is a decision the
- * partners have not made yet, and nothing in this codebase may make it for them.
+ * Each floor row declares the single value that trips it. That indirection is the
+ * whole point: eight of the ten floor rows are binary and trip on Fail, but
+ * Ambition & exit-type fit and Cap-table health are scored 1–5 and killed at 1.
+ * A check written as "binary rows scored fail" — which is what this function used
+ * to be — silently misses both, and misses them in the direction that matters:
+ * the deal looks clean when the framework says drop it.
+ *
+ * A fact, reported for rendering. The framework says a Fail drops the deal, but it
+ * leaves the G1 thresholds pending (spec D1) — so this function names the breaches
+ * and stops there. Turning a breach into a verdict is a decision the partners have
+ * not made yet, and nothing in this codebase may make it for them. `weight` is
+ * likewise reported, not applied: it carries Notion's own distinction between a
+ * kill and an elevated, mandatory-clear flag.
  */
 export function floorBreaches(scores: readonly SubDimensionScore[]): FloorBreach[] {
   return scores.flatMap((s) => {
-    if (s.scoreType !== "binary" || s.value !== "fail") return [];
     const sub = subByKey(s.subDimensionKey);
     if (!sub?.floor) return [];
-    return [{ subDimensionKey: s.subDimensionKey, label: sub.label }];
+    if (s.value !== sub.floor.breachAt) return [];
+    return [
+      {
+        subDimensionKey: s.subDimensionKey,
+        label: sub.label,
+        value: s.value,
+        weight: sub.floor.weight,
+        ...(sub.open ? { open: sub.open } : {}),
+      },
+    ];
   });
+}
+
+/** Breaches the framework treats as deal-dropping, as opposed to flagged. */
+export function killBreaches(scores: readonly SubDimensionScore[]): FloorBreach[] {
+  return floorBreaches(scores).filter((b) => b.weight === "kill");
+}
+
+/** Breaches the framework treats as an elevated, mandatory-clear condition. */
+export function flagBreaches(scores: readonly SubDimensionScore[]): FloorBreach[] {
+  return floorBreaches(scores).filter((b) => b.weight === "flag");
 }

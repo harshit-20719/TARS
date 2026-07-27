@@ -79,16 +79,24 @@ export function SlideCard({
 
       <div className="rooted">
         <span className="rl">rooted</span>
-        {def.rooted.map((r) => {
-          const sub = subByKey(r.subKey);
-          const isDriver = r.subKey === driver;
-          return (
-            <span key={r.subKey} className={`root-item ${isDriver ? "cap-driver" : ""}`}>
-              <ScorePill score={scores.get(r.subKey)} className="sm" /> {sub?.label ?? r.subKey}
-              {isDriver ? " · sets ceiling" : ""}
-            </span>
-          );
-        })}
+        {/* An empty rooting is a real state of the framework, not a missing config:
+            no capture row's "Roots to" column names business-model innovation, and
+            the Idea track reads the pillar slides rather than any capture row. Say
+            so rather than showing an empty strip. */}
+        {def.rooted.length === 0 ? (
+          <span className="root-item mut">{def.note ?? "no capture row roots here"}</span>
+        ) : (
+          def.rooted.map((r) => {
+            const sub = subByKey(r.subKey);
+            const isDriver = r.subKey === driver;
+            return (
+              <span key={r.subKey} className={`root-item ${isDriver ? "cap-driver" : ""}`}>
+                <ScorePill score={scores.get(r.subKey)} className="sm" /> {sub?.label ?? r.subKey}
+                {isDriver ? " · sets ceiling" : ""}
+              </span>
+            );
+          })
+        )}
       </div>
 
       {slide?.ceilingGuard && (

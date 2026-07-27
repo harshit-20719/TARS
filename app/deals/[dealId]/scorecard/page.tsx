@@ -54,14 +54,18 @@ export default async function ScorecardPage({ params }: { params: Promise<{ deal
         <div>
           {roll.floorStatus === "fail" ? (
             <>
-              <b>Floor: failed.</b> A binary hygiene row is Fail — deal-dropping.
+              <b>Floor: failed.</b> Tripped at the kill value: {roll.killedBy.join(", ")}.
             </>
           ) : (
             <>
-              <b>Floor: clear.</b> All binary hygiene rows pass or are pending — no deal-dropping Fail.
+              <b>Floor: clear.</b> No hygiene row is at its kill value — binary rows pass or are pending, and the
+              two 1–5 kill-floors (ambition &amp; exit-type fit, cap-table health) read above 1.
             </>
           )}
-          {roll.flags.length > 0 && <> One condition flagged: {roll.flags.join(", ")} (spec D5).</>}
+          {roll.mandatoryClears.length > 0 && (
+            <> Flagged, not killed: {roll.mandatoryClears.join(", ")} — mandatory-clear condition (spec D5).</>
+          )}
+          {roll.flags.length > 0 && <> Condition flagged on {roll.flags.join(", ")} (spec D5).</>}
         </div>
       </div>
 
