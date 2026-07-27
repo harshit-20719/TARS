@@ -278,6 +278,7 @@ role wiring without any UI for it.
 
 | What you see | What it means | Fix |
 |---|---|---|
+| Any `/api/auth/*` URL returns `{"message":"There was a problem with the server configuration…"}` | **`AUTH_SECRET` is not set.** Auth.js logs the real reason (`MissingSecret`) server-side but deliberately keeps the browser message vague so config details do not leak | Add `AUTH_SECRET` (5a/5b), redeploy. `/api/auth/providers` then returns `{}` until Google is configured too |
 | Build fails, mentions `DATABASE_URL` | No database yet, **or** the integration named the variable something else | Stage 3, including the "Confirm the variable name" step |
 | Build fails, mentions `prisma migrate` or `P1001` | Database attached but unreachable | Check the Storage tab shows it connected to *this* project, and that `DATABASE_URL` is set for Production |
 | `Environment variable not found: DATABASE_URL` | The variable exists under a different name | Copy its value into a new variable named exactly `DATABASE_URL` |
