@@ -145,11 +145,11 @@ describe("extractFromTranscript", () => {
     expect(JSON.stringify(calls[0].messages)).toContain("mid-market bank operations");
   });
 
-  it("keeps thinking on at medium effort", async () => {
+  it("keeps thinking on, at the effort the latency budget allows", async () => {
     const { client, calls } = stub(output());
     await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client });
     expect(calls[0].thinking).toEqual({ type: "adaptive" });
-    expect((calls[0].output_config as { effort: string }).effort).toBe("medium");
+    expect((calls[0].output_config as { effort: string }).effort).toBe("low");
   });
 
   it("defaults the model but honours EXTRACTION_MODEL", async () => {
@@ -244,7 +244,7 @@ describe("thinking config per model generation", () => {
     for (const model of ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-4-6"]) {
       expect(thinkingConfigFor(model), model).toEqual({
         thinking: { type: "adaptive" },
-        effort: "medium",
+        effort: "low",
       });
     }
   });
@@ -271,7 +271,14 @@ describe("thinking config per model generation", () => {
   });
 
   it("treats an unrecognised id as modern, the likelier direction", () => {
-    expect(thinkingConfigFor("claude-something-new").effort).toBe("medium");
+    expect(thinkingConfigFor("claude-something-new").effort).toBe("low");
+  });
+
+  it("lets EXTRACTION_EFFORT raise the level without a code change", () => {
+    // The escape hatch for short transcripts that can afford more thinking.
+    vi.stubEnv("EXTRACTION_EFFORT", "high");
+    expect(thinkingConfigFor("claude-sonnet-5").effort).toBe("high");
+    vi.unstubAllEnvs();
   });
 
   it("keeps the pre-4.6 budget below max_tokens, which the API requires", () => {
@@ -297,7 +304,7 @@ describe("thinking config per model generation", () => {
     expect(haiku.thinking).toEqual({ type: "enabled", budget_tokens: 4000 });
     expect((haiku.output_config as Record<string, unknown>).effort).toBeUndefined();
     expect(opus.thinking).toEqual({ type: "adaptive" });
-    expect((opus.output_config as Record<string, unknown>).effort).toBe("medium");
+    expect((opus.output_config as Record<string, unknown>).effort).toBe("low");
     // The schema travels either way — the authorship rule is not model-dependent.
     for (const params of seen) {
       expect((params.output_config as Record<string, unknown>).format).toBeTruthy();

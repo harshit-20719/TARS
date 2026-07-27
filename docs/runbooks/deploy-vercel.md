@@ -254,6 +254,7 @@ these. Set every one to **All Environments**:
 | `ADMIN_EMAILS` | your own address, e.g. `you@biome.in` | **Yes** — otherwise nobody is an admin |
 | `ANTHROPIC_API_KEY` | from https://console.anthropic.com → API Keys | Optional — costs money, add later |
 | `EXTRACTION_MODEL` | `claude-sonnet-5` | Optional — cheaper extraction |
+| `EXTRACTION_EFFORT` | `low` (the default) | Optional — raise to `medium`/`high` only if transcripts are short enough to finish inside 60s |
 
 Do **not** add `AUTH_DEV_CREDENTIALS`. That is for local development only and is
 ignored in production builds.
@@ -315,7 +316,8 @@ role wiring without any UI for it.
 | `redirect_uri_mismatch` from Google | The redirect URI doesn't match your domain | Stage 4b step 4 — it must be `https://<domain>/api/auth/callback/google` exactly |
 | Signed in, then immediately signed out | `AUTH_SECRET` missing or changed | Recheck 5b, redeploy |
 | "Access blocked" from Google | Account isn't `@biome.in` | Sign in with a Biome account |
-| No extraction button on the transcript page | `ANTHROPIC_API_KEY` unset — working as designed | Add it (5b) and redeploy; `/api/health` shows `extractionEnabled` |
+| The call card shows "extraction off · no ANTHROPIC_API_KEY" | The key is not set for **Production** | Settings → Environment Variables → tick Production, redeploy. `/api/health` confirms with `extractionEnabled` |
+| Extraction returns "An error occurred in the Server Components render" | The function was killed at its time limit before it could return, so there is no error to report | Long transcripts need time. `maxDuration` is 60s (the free-tier ceiling); if a transcript still outruns it, set `EXTRACTION_EFFORT=low` (the default) or split the call in two |
 | Extraction runs but drops most quotes | The model paraphrased; unverifiable quotes are discarded on purpose | Normal on a lightly-punctuated transcript. Re-run, or paste a cleaner transcript |
 
 Build logs are the fastest diagnosis: **Deployments** → click the failed one →

@@ -4,6 +4,20 @@ import { AddCallForm } from "@/components/authoring/AddCallForm";
 import { RunExtractionButton } from "@/components/authoring/RunExtractionButton";
 import { DeleteCall } from "@/components/authoring/DeleteCall";
 
+/**
+ * Extraction runs inside a server action invoked from this page, so this page's
+ * limit is the one that applies to it. Vercel's default is a few seconds — fine
+ * for every other action in the app, and far too short for this one: a
+ * forty-minute transcript takes the model tens of seconds to read. Past the
+ * limit the function is killed rather than returning, so no error object ever
+ * reaches the error handling, and the browser gets the generic
+ * "an error occurred in the Server Components render" instead.
+ *
+ * 60 is the ceiling on Vercel's free tier. If a transcript still outruns it, the
+ * lever that costs nothing is EXTRACTION_EFFORT (see lib/extraction/extract.ts).
+ */
+export const maxDuration = 60;
+
 export default async function TranscriptPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
   const [deal, rec] = await Promise.all([getDeal(dealId), getRecord(dealId)]);

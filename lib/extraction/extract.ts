@@ -55,7 +55,20 @@ export function thinkingConfigFor(model: string): Record<string, unknown> {
   // unknown case takes the modern shape.
   const adaptive = !parsed || major >= 5 || (major === 4 && minor >= 6);
   if (adaptive) {
-    return { thinking: { type: "adaptive" }, effort: "medium" };
+    /**
+     * Effort is the latency lever, and latency is the binding constraint here:
+     * the whole extraction has to finish inside one serverless function call
+     * (60 seconds on Vercel's free tier), and a forty-minute transcript is not a
+     * small read. "low" is the default because this is a careful-reading task
+     * rather than a reasoning one — quote exactly, map to a row, tag an origin —
+     * and a run that gets killed at the ceiling produces nothing at all, which
+     * is worse than a run that thinks a little less.
+     *
+     * Raise it with EXTRACTION_EFFORT if the mapping quality needs it and the
+     * transcripts are short enough to afford it.
+     */
+    const effort = process.env.EXTRACTION_EFFORT?.trim() || "low";
+    return { thinking: { type: "adaptive" }, effort };
   }
   /**
    * Pre-4.6: a fixed budget, which must be strictly less than max_tokens. 4000

@@ -208,16 +208,25 @@ export async function runExtractionForCall(
     { client: options.client, model: options.model },
   );
 
-  const written = await db.$transaction(async (tx) => {
-    // Only drafts are cleared. Anything the PM ruled on stays.
-    await tx.observation.deleteMany({
-      where: { dealId: call.dealId, callNumber: call.number, status: "draft" },
-    });
+  /**
+   * Batched, and given a longer ceiling than the default.
+   *
+   * The first version wrote one row per round trip inside the transaction — a
+   * couple of dozen sequential queries against a connection that goes through
+   * Prisma Postgres's proxy. Prisma's interactive transactions time out after
+   * five seconds by default, so a slow network turned a successful extraction
+   * into a failed write, and the model tokens were paid for either way. Four
+   * queries instead of N, and a ceiling that a bad minute cannot reach.
+   */
+  const written = await db.$transaction(
+    async (tx) => {
+      // Only drafts are cleared. Anything the PM ruled on stays.
+      await tx.observation.deleteMany({
+        where: { dealId: call.dealId, callNumber: call.number, status: "draft" },
+      });
 
-    const quoteToId = new Map<string, string>();
-    for (const o of result.observations) {
-      const created = await tx.observation.create({
-        data: {
+      await tx.observation.createMany({
+        data: result.observations.map((o) => ({
           dealId: call.dealId,
           callNumber: call.number,
           rubricKey: o.rubricKey,
@@ -225,39 +234,46 @@ export async function runExtractionForCall(
           quote: o.quote,
           speaker: o.speaker,
           timestamp: o.timestamp,
-          status: "draft",
-          layer: "L1",
-        },
-        select: { id: true },
+          status: "draft" as const,
+          layer: "L1" as const,
+        })),
       });
-      quoteToId.set(normaliseForComparison(o.quote), created.id);
-    }
 
-    let claimsWritten = 0;
-    for (const c of result.claims) {
-      const anchorObsId = quoteToId.get(normaliseForComparison(c.anchorQuote));
-      if (!anchorObsId) continue; // verifyDrafts should have removed these already
-      await tx.claim.create({
-        data: {
-          dealId: call.dealId,
-          text: c.text,
-          originTag: c.originTag === "founder-volunteered"
-            ? "founderVolunteered"
-            : c.originTag === "founder-confirmed-after-PM-framing"
-              ? "founderConfirmedAfterPmFraming"
-              : "machineInferred",
-          // Every claim opens unverified at L1 — validated/refuted are L2.
-          status: "claimed",
-          anchorObsId,
-        },
+      // createMany does not return ids, and claims need one to anchor to.
+      const persisted = await tx.observation.findMany({
+        where: { dealId: call.dealId, callNumber: call.number, status: "draft" },
+        select: { id: true, quote: true },
       });
-      claimsWritten++;
-    }
+      const quoteToId = new Map(persisted.map((o) => [normaliseForComparison(o.quote), o.id]));
 
-    await tx.call.update({ where: { id: callId }, data: { extracted: true } });
+      const claimRows = result.claims.flatMap((c) => {
+        const anchorObsId = quoteToId.get(normaliseForComparison(c.anchorQuote));
+        // verifyDrafts should already have dropped these.
+        if (!anchorObsId) return [];
+        return [
+          {
+            dealId: call.dealId,
+            text: c.text,
+            originTag:
+              c.originTag === "founder-volunteered"
+                ? ("founderVolunteered" as const)
+                : c.originTag === "founder-confirmed-after-PM-framing"
+                  ? ("founderConfirmedAfterPmFraming" as const)
+                  : ("machineInferred" as const),
+            // Every claim opens unverified at L1 — validated/refuted are L2.
+            status: "claimed" as const,
+            anchorObsId,
+          },
+        ];
+      });
+      if (claimRows.length) await tx.claim.createMany({ data: claimRows });
 
-    return { observationsWritten: quoteToId.size, claimsWritten };
-  });
+      await tx.call.update({ where: { id: callId }, data: { extracted: true } });
+
+      return { observationsWritten: persisted.length, claimsWritten: claimRows.length };
+    },
+    { timeout: 20_000, maxWait: 10_000 },
+  );
 
   return { ...result, ...written };
 }
