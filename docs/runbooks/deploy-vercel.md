@@ -68,8 +68,17 @@ The app needs Postgres. Vercel can create one and wire it up for you.
 
 ### Confirm the variable name — do not skip this
 
-Go to **Settings** → **Environment Variables** and look for **`DATABASE_URL`**.
-Its value will start with `prisma+postgres://`.
+**Finding environment variables.** Vercel has two layouts in the wild:
+
+- **Newer UI** (no "Environment Variables" item in the Settings sidebar): go
+  **Settings** → **Environments** → click the **Production** row. The variables
+  are inside that environment. Repeat for **Preview** if you want previews to
+  work.
+- **Older UI**: **Settings** → **Environment Variables**, with checkboxes for
+  which environments each one applies to.
+
+Either way, look for **`DATABASE_URL`**. Its value will start with
+`prisma+postgres://`.
 
 Depending on which version of the integration you get, Vercel sometimes names it
 **`PRISMA_DATABASE_URL`** or **`POSTGRES_URL`** instead. The app reads
@@ -113,8 +122,13 @@ that make that work.
 
 ### 4a. Find your app's address
 
-In your project, click the **Deployments** tab and note the domain, something
-like `tars-abc123.vercel.app`. Write it down — you need it twice below.
+Your production domain is shown in **Settings** → **Environments**, on the
+**Production** row (it is also on the **Deployments** tab). It looks like
+`tars-henna.vercel.app`. Write it down — you need it below.
+
+Use the **production** domain, not a per-deployment URL. Per-deployment URLs
+contain a build hash and change on every push, so a redirect URI built from one
+stops working immediately.
 
 ### 4b. Create the Google credentials
 
