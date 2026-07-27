@@ -18,6 +18,7 @@
 
 import { db } from "@/lib/db";
 import { adminEmails } from "@/lib/adminEmails";
+import { ALLOWED_EMAIL_DOMAIN } from "@/lib/auth.config";
 
 // Never prerender or cache — the whole point is the live state of this instance.
 export const dynamic = "force-dynamic";
@@ -66,6 +67,10 @@ export async function GET() {
       // "did my redeploy pick up the change" without reading build logs.
       commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local",
       env,
+      // Surfaced because a sign-in that clears Google can still be refused here,
+      // and the message Auth.js shows for that does not say which domain it wanted.
+      allowedEmailDomain: ALLOWED_EMAIL_DOMAIN,
+      expectedCallbackUrl: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : ""}/api/auth/callback/google`,
       adminEmailCount: adminEmails().length,
       database,
       migrationsApplied: tables,
