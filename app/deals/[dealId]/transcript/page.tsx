@@ -50,14 +50,24 @@ export default async function TranscriptPage({ params }: { params: Promise<{ dea
               <div className="card-body">
                 <textarea className="ta" readOnly defaultValue={c.transcript} />
                 <div className="ctl-row" style={{ marginTop: 12 }}>
-                  {extractionEnabled && (
-                    <>
-                      <RunExtractionButton callId={c.id} alreadyExtracted={c.extracted} />
-                      <span className="ctl-note">
-                        {drafted} observation{drafted === 1 ? "" : "s"} filed from this call
-                      </span>
-                    </>
+                  {/*
+                    Say which state this is in rather than hiding the control. An
+                    absent button is indistinguishable from a broken page: the
+                    reader cannot tell whether extraction is switched off or
+                    whether the feature failed to render, and both look like
+                    nothing happened.
+                  */}
+                  {extractionEnabled ? (
+                    <RunExtractionButton callId={c.id} alreadyExtracted={c.extracted} />
+                  ) : (
+                    <span className="chip pending">
+                      <span className="dot" />
+                      extraction off · no ANTHROPIC_API_KEY on this deployment
+                    </span>
                   )}
+                  <span className="ctl-note">
+                    {drafted} observation{drafted === 1 ? "" : "s"} filed from this call
+                  </span>
                   <div className="spacer" style={{ flex: 1 }} />
                   <DeleteCall dealId={dealId} callId={c.id} callNumber={c.number} draftedCount={drafted} />
                 </div>
