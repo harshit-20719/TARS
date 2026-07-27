@@ -1,174 +1,248 @@
-# Runbook — local setup and Vercel deployment
+# Deploying TARS to Vercel — step by step
 
-Two audiences: someone starting work on the backend locally, and someone
-provisioning the deployed app. The Vercel half needs dashboard access, which the
-agent that wrote this does not have — those steps are for you or Mehul.
+Written for someone who has not done this before. Follow it in order; each step
+says what to click and how to know it worked. Total time: about 30 minutes, most
+of it waiting for builds.
+
+You will need accounts on: **GitHub** (have it), **Vercel** (free), and **Google
+Cloud** (free, for sign-in).
+
+There are five stages:
+
+1. Get the code onto `main`
+2. Create the Vercel project
+3. Add a database
+4. Set up Google sign-in
+5. Turn sign-in on and verify
+
+---
+
+## Stage 1 — Get the code onto `main`
+
+Vercel deploys whatever is on your repository's main branch. The backend is
+currently on a branch called `claude/capture-scorecard-skeleton-1299ab`, so it
+has to be merged first.
+
+Ask Claude to do it, or run:
+
+```bash
+git checkout main
+git merge claude/capture-scorecard-skeleton-1299ab
+git push origin main
+```
+
+**How to know it worked:** open your repo on GitHub, and confirm you can see a
+`prisma` folder in the file list.
+
+---
+
+## Stage 2 — Create the Vercel project
+
+1. Go to **https://vercel.com** and sign in with GitHub.
+2. On your dashboard click **Add New…** → **Project**.
+3. Under *Import Git Repository*, find **TARS** and click **Import**.
+   - If you don't see it, click **Adjust GitHub App Permissions** and grant
+     Vercel access to the repository.
+4. Leave every setting alone. Vercel detects Next.js on its own, and the build
+   command in the repo already handles the database setup.
+5. Click **Deploy**.
+
+**This first deploy will fail.** That is expected — there is no database yet.
+You'll see a red error mentioning `DATABASE_URL` or `prisma migrate`. Carry on to
+stage 3.
+
+---
+
+## Stage 3 — Add a database
+
+The app needs Postgres. Vercel can create one and wire it up for you.
+
+1. In your project, click the **Storage** tab.
+2. Click **Create Database** → choose **Postgres** → **Continue**.
+3. Accept the default name and region — pick the region closest to you.
+4. Click **Create**.
+5. When it asks which project to connect it to, choose **TARS**, with all three
+   environments (Production, Preview, Development) ticked.
+
+Vercel now sets `DATABASE_URL` for you automatically. You never see or copy the
+password.
+
+**How to know it worked:** go to **Settings** → **Environment Variables** and
+confirm a `DATABASE_URL` row exists.
+
+---
+
+## Stage 4 — Set up Google sign-in
+
+The app has no public pages — everything requires signing in, and sign-in is
+restricted to `@biome.in` Google accounts. This stage creates the credentials
+that make that work.
+
+> **Why this is not optional:** the app refuses all access when no sign-in method
+> is configured. That is deliberate for something holding founder call
+> transcripts, but it does mean skipping this stage leaves you locked out.
+
+### 4a. Find your app's address
+
+In your project, click the **Deployments** tab and note the domain, something
+like `tars-abc123.vercel.app`. Write it down — you need it twice below.
+
+### 4b. Create the Google credentials
+
+1. Go to **https://console.cloud.google.com**.
+2. At the top left, click the project dropdown → **New Project**. Name it
+   `TARS` → **Create**. Wait for it, then make sure it's selected.
+3. In the left menu go to **APIs & Services** → **OAuth consent screen**.
+   - User type: **Internal** if `biome.in` is a Google Workspace domain — pick
+     this if you can, it's simpler. Otherwise **External**.
+   - App name: `TARS`. Support email: your address. Developer email: your
+     address. Click through **Save and Continue** to the end.
+4. In the left menu go to **Credentials** → **Create Credentials** → **OAuth
+   client ID**.
+   - Application type: **Web application**
+   - Name: `TARS Web`
+   - Under **Authorised redirect URIs** click **Add URI** and enter exactly,
+     replacing the domain with yours:
+
+     ```
+     https://tars-abc123.vercel.app/api/auth/callback/google
+     ```
+
+     The `/api/auth/callback/google` part must be exact.
+   - Click **Create**.
+5. A box appears with **Client ID** and **Client secret**. Keep it open — you
+   need both in the next stage.
+
+---
+
+## Stage 5 — Turn sign-in on and verify
+
+### 5a. Generate a session secret
+
+On your machine, in the project folder:
+
+```bash
+npx auth secret --raw
+```
+
+That prints a long random string. Copy it. (If `--raw` isn't recognised, run
+`npx auth secret` and copy the value it writes into `.env.local`.)
+
+### 5b. Add the environment variables
+
+In Vercel: **Settings** → **Environment Variables**. Add these four, one at a
+time. For each, leave all three environment checkboxes ticked, then **Save**:
+
+| Key | Value |
+|---|---|
+| `AUTH_SECRET` | the string from 5a |
+| `AUTH_GOOGLE_ID` | Client ID from stage 4 |
+| `AUTH_GOOGLE_SECRET` | Client secret from stage 4 |
+| `ANTHROPIC_API_KEY` | from https://console.anthropic.com → API Keys |
+
+Do **not** add `AUTH_DEV_CREDENTIALS`. That is for local development only and is
+ignored in production.
+
+### 5c. Redeploy
+
+Environment variables only apply to new builds.
+
+1. Go to the **Deployments** tab.
+2. On the most recent deployment click the **⋯** menu → **Redeploy** →
+   **Redeploy**.
+3. Wait for the green tick. This build also creates the database tables.
+
+### 5d. Verify
+
+Open `https://your-domain.vercel.app/deals`. You should be redirected to a
+sign-in page offering Google. Sign in with your `@biome.in` account.
+
+You should land on an empty deals list. **Empty is correct** — the database is
+new. Seeing the page at all means everything is wired up: the app authenticated
+you, connected to Postgres, and rendered.
+
+You are now signed in as a **PM**, which can author the record. The first person
+to sign in with any `@biome.in` account gets the PM role automatically.
+
+---
+
+## If something goes wrong
+
+| What you see | What it means | Fix |
+|---|---|---|
+| Build fails, mentions `DATABASE_URL` | No database attached yet | Stage 3 |
+| Build fails, mentions `prisma migrate` | Database attached but unreachable | Check Storage tab shows it connected to this project |
+| Sign-in page shows no Google button | Google variables missing or not yet built | Recheck 5b spelling, then redeploy (5c) |
+| `redirect_uri_mismatch` from Google | The redirect URI doesn't match your domain | Stage 4b step 4 — it must be `https://<domain>/api/auth/callback/google` exactly |
+| Signed in, then immediately signed out | `AUTH_SECRET` missing or changed | Recheck 5b, redeploy |
+| "Access blocked" from Google | Account isn't `@biome.in` | Sign in with a Biome account |
+| Pages load but extraction errors | `ANTHROPIC_API_KEY` missing | Add it (5b), redeploy |
+
+Build logs are the fastest diagnosis: **Deployments** → click the failed one →
+scroll the log for the first red line.
+
+---
+
+## After it's live
+
+**Pushing updates.** Any push to `main` redeploys automatically. Nothing else to
+do.
+
+**Giving someone the partner role.** Everyone starts as PM. To make someone a
+read-only PARTNER, they sign in once, then in Vercel go **Storage** → your
+database → **Data** / query editor and run:
+
+```sql
+UPDATE "User" SET role = 'PARTNER' WHERE email = 'someone@biome.in';
+```
+
+Roles are `PM` (authors), `PARTNER` (reads), `ADMIN` (both, plus user
+management). A role change takes effect the next time they sign in.
+
+**Custom domain.** Settings → Domains. If you add one, go back to stage 4b and
+add a second redirect URI for the new domain.
+
+---
+
+## Notes for later
+
+**Migrations run during the build.** The build command is
+`prisma generate && prisma migrate deploy && next build`, so schema changes apply
+themselves on deploy. The trade-off: a broken migration fails the deploy rather
+than half-applying. That is the safer failure for a pilot, but as the team grows
+you may want to move migrations to a deliberate step.
+
+**Preview deployments share the production database** with the default Vercel
+setup. Fine for now; worth separating before anyone tests destructive changes on
+a branch.
+
+**Rotating `AUTH_SECRET`** signs everybody out. Rotating `ANTHROPIC_API_KEY`
+affects only extraction.
 
 ---
 
 ## Local development
 
-### 1. Postgres
-
-Any Postgres 14+ will do. Two databases, one for development and one for tests:
+Separate from deployment — this is for running the app on your own machine.
 
 ```bash
-createdb tars
-createdb tars_test
-```
-
-Or with Docker:
-
-```bash
+# One-time: a local Postgres
 docker run -d --name tars-pg -p 5433:5432 \
   -e POSTGRES_USER=tars -e POSTGRES_PASSWORD=tars -e POSTGRES_DB=tars \
   postgres:16-alpine
 docker exec tars-pg createdb -U tars tars_test
-```
 
-### 2. Environment
-
-```bash
-cp .env.example .env
-npx auth secret          # writes AUTH_SECRET
-```
-
-Set `DATABASE_URL` and `TEST_DATABASE_URL` to match your Postgres. Leave
-`AUTH_DEV_CREDENTIALS="true"` so you can sign in without Google credentials.
-
-### 3. Schema and data
-
-```bash
+cp .env.example .env      # then set AUTH_SECRET
 npm install
-npm run db:migrate       # apply migrations
-npm run db:seed          # load the three fixture deals + three users
-```
-
-### 4. Run it
-
-```bash
+npm run db:migrate
+npm run db:seed           # loads three fictional deals
 npm run dev
 ```
 
-Sign in at `/api/auth/signin` with any seeded user, password `tars-dev`:
-
-| Email | Role | Can do |
-|---|---|---|
-| `harshit.agarwal@biome.in` | ADMIN | everything |
-| `pm@biome.in` | PM | author the record |
-| `partner@biome.in` | PARTNER | read only |
-
-### 5. Tests
+Sign in at `/api/auth/signin` with `pm@biome.in` and password `tars-dev` — no
+Google setup needed locally.
 
 ```bash
-npm test                 # 112 tests; migrates + seeds tars_test first
+npm test          # against the separate tars_test database
 npm run typecheck
 ```
-
-The suite refuses to run against a database whose name does not contain
-`_test`.
-
----
-
-## Vercel deployment
-
-### 1. Move the project off the personal fork
-
-The current deployment was created from a personal fork. To own it:
-
-1. In Vercel, create a new project against `harshit-20719/TARS` under the Biome
-   team.
-2. Framework preset: **Next.js**. Build command and output directory are
-   detected — the `build` script already runs `prisma generate` first, which is
-   required because the generated client is not committed.
-3. Delete the old project once the new one serves traffic, so pushes stop
-   deploying twice.
-
-### 2. Postgres
-
-Vercel dashboard → **Storage** → create a Postgres database → connect it to the
-project. Vercel injects `DATABASE_URL` (and `POSTGRES_*` aliases) automatically.
-
-> Vercel's Postgres is Neon-backed. Either way it is a standard Postgres
-> connection string and needs no code change.
-
-### 3. Environment variables
-
-Project → Settings → Environment Variables. Set for **Production** and
-**Preview**:
-
-| Variable | Value | Notes |
-|---|---|---|
-| `DATABASE_URL` | *(injected by Storage)* | Verify it is present |
-| `AUTH_SECRET` | `npx auth secret` output | Different from local |
-| `AUTH_GOOGLE_ID` | from Google Cloud | See step 4 |
-| `AUTH_GOOGLE_SECRET` | from Google Cloud | See step 4 |
-| `ANTHROPIC_API_KEY` | from the Anthropic console | Extraction fails without it |
-| `EXTRACTION_MODEL` | *(omit)* | Defaults to `claude-opus-5` |
-
-**Do not set `AUTH_DEV_CREDENTIALS`.** It is ignored in production builds, but
-leaving it unset removes the question entirely.
-
-### 4. Google OAuth
-
-Required — without it nobody can sign in (auth fails closed by design).
-
-1. Google Cloud Console → **APIs & Services** → **Credentials** → Create
-   credentials → **OAuth client ID** → Web application.
-2. Authorised redirect URIs — add one per domain you will use:
-   - `https://<your-domain>/api/auth/callback/google`
-   - `https://<preview-domain>/api/auth/callback/google` if previews need sign-in
-3. Copy the client ID and secret into the Vercel variables above.
-
-Sign-in is restricted to `@biome.in` addresses with a verified email, in
-`lib/auth.config.ts`. Change `ALLOWED_EMAIL_DOMAIN` there to widen it.
-
-### 5. Migrate and seed production
-
-Migrations do not run automatically. From your machine, against the production
-connection string:
-
-```bash
-DATABASE_URL="<production url>" npx prisma migrate deploy
-```
-
-Then create the real users. **Do not run `npm run db:seed` against
-production** — it loads three fictional deals. Instead insert the actual people,
-with `passwordHash` left null so they can only sign in with Google:
-
-```sql
-INSERT INTO "User" (id, email, name, role, "createdAt", "updatedAt")
-VALUES (gen_random_uuid()::text, 'someone@biome.in', 'Someone', 'PM', now(), now());
-```
-
-Roles are `PM`, `PARTNER`, `ADMIN`.
-
-> A first-time Google sign-in creates a `User` row automatically with the default
-> role `PM`. Pre-inserting is only needed to give somebody `PARTNER` or `ADMIN`
-> before their first sign-in.
-
-### 6. Verify
-
-- `https://<domain>/deals` redirects to sign-in when signed out.
-- Sign in with a `@biome.in` Google account; the three routes render.
-- A non-Biome Google account is refused.
-
----
-
-## Operational notes
-
-**Migrations on deploy.** Adding `prisma migrate deploy` to the build command
-would let a failed migration take the site down mid-deploy, and Vercel builds
-can run concurrently. Running it deliberately from a machine is the safer
-default at this size.
-
-**Connection limits.** Serverless opens a pool per instance, and Postgres
-providers cap connections. If you see connection-limit errors under load, add a
-pooled connection string (`?pgbouncer=true` on Neon-backed Vercel Postgres)
-rather than raising the cap.
-
-**Rolling back.** Prisma has no down-migrations. To undo a schema change, write
-a new migration that reverses it.
-
-**Secret rotation.** Rotating `AUTH_SECRET` invalidates every session — everyone
-signs in again. Rotating `ANTHROPIC_API_KEY` affects nothing but extraction.
