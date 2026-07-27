@@ -14,6 +14,7 @@
 import type { NextAuthConfig } from "next-auth";
 import Google from "next-auth/providers/google";
 import type { Role } from "@prisma/client";
+import { resolveRole, type RoleName } from "@/lib/adminEmails";
 
 /** Only Biome accounts may sign in with Google. */
 export const ALLOWED_EMAIL_DOMAIN = "biome.in";
@@ -41,14 +42,23 @@ export const authConfig = {
     },
 
     /**
-     * Carry the user id and role on the token. The role is read off the user
-     * object the adapter or the credentials provider returned, never fetched
-     * here — this callback also runs in middleware, where there is no database.
+     * Carry the user id and role on the token.
+     *
+     * `user` is present only on the sign-in request, so the work here happens
+     * once per session and never in middleware — which matters because this
+     * callback also runs on the edge, where there is no database. The stored role
+     * comes off the object the adapter or credentials provider returned; nothing
+     * is queried here.
+     *
+     * ADMIN_EMAILS wins over the stored role, so promoting yourself is a config
+     * change rather than a database edit. lib/auth.ts writes the same decision
+     * back to the row so the two cannot drift.
      */
     jwt({ token, user }) {
       if (user) {
         token.id = user.id as string;
-        token.role = (user as { role?: Role }).role ?? "PM";
+        const stored = (user as { role?: Role }).role;
+        token.role = resolveRole(user.email, stored as RoleName | undefined);
       }
       return token;
     },

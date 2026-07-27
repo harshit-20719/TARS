@@ -17,6 +17,46 @@ There are five stages:
 
 ---
 
+## What this costs
+
+Running the app costs nothing. One optional feature is metered.
+
+| Thing | Cost |
+|---|---|
+| Vercel Hobby | **Free** |
+| Prisma Postgres free tier | **Free** |
+| Google Cloud OAuth | **Free** — no billing account needed for a client ID |
+| **Anthropic API** — the extraction step only | **Metered.** No subscription; billed per token |
+
+**You can deploy and use the app with zero spend** by leaving
+`ANTHROPIC_API_KEY` unset. Everything works except the "run extraction" button,
+which returns a clear error rather than breaking the page. Add the key whenever
+you want the machine to draft observations.
+
+When you do turn extraction on, a rough per-transcript cost — a 45-minute call,
+which is about 15k tokens in and 5k out:
+
+| Model | Per transcript |
+|---|---|
+| `claude-opus-5` (default) | ~20¢ |
+| `claude-sonnet-5` | ~8¢ |
+
+So ten transcripts is about $2, or $0.80 on Sonnet. To use Sonnet, add an
+environment variable `EXTRACTION_MODEL` = `claude-sonnet-5`. Nothing else
+changes. Opus is the default because a PM reads every drafted quote and a
+mis-mapped observation costs more attention than the difference in cents — but
+for a POC either is defensible, and it is a one-line switch either way.
+
+> Anthropic sells prepaid credits with a minimum purchase (usually \$5), so
+> that is the practical floor for trying extraction at all.
+
+> **One caveat on Vercel Hobby:** its terms are written for personal,
+> non-commercial projects. An internal company POC sits in a grey area. Nothing
+> will stop you today; worth knowing before this becomes something the firm
+> depends on.
+
+---
+
 ## Stage 1 — Get the code onto `main`
 
 Vercel deploys whatever is on your repository's main branch. The backend is
@@ -173,18 +213,41 @@ That prints a long random string. Copy it. (If `--raw` isn't recognised, run
 
 ### 5b. Add the environment variables
 
-In Vercel: **Settings** → **Environment Variables**. Add these four, one at a
-time. For each, leave all three environment checkboxes ticked, then **Save**:
+Go to where the database variables already are (**Settings** → **Environments** →
+**Production** in the newer UI) and click **Add Environment Variable** for each of
+these. Set every one to **All Environments**:
 
-| Key | Value |
-|---|---|
-| `AUTH_SECRET` | the string from 5a |
-| `AUTH_GOOGLE_ID` | Client ID from stage 4 |
-| `AUTH_GOOGLE_SECRET` | Client secret from stage 4 |
-| `ANTHROPIC_API_KEY` | from https://console.anthropic.com → API Keys |
+| Key | Value | Needed? |
+|---|---|---|
+| `AUTH_SECRET` | the string from 5a | **Yes** |
+| `AUTH_GOOGLE_ID` | Client ID from stage 4 | **Yes** |
+| `AUTH_GOOGLE_SECRET` | Client secret from stage 4 | **Yes** |
+| `ADMIN_EMAILS` | your own address, e.g. `you@biome.in` | **Yes** — otherwise nobody is an admin |
+| `ANTHROPIC_API_KEY` | from https://console.anthropic.com → API Keys | Optional — costs money, add later |
+| `EXTRACTION_MODEL` | `claude-sonnet-5` | Optional — cheaper extraction |
 
 Do **not** add `AUTH_DEV_CREDENTIALS`. That is for local development only and is
-ignored in production.
+ignored in production builds.
+
+### How roles work
+
+- **You** — listed in `ADMIN_EMAILS` — sign in as **ADMIN**.
+- **Anyone else with a `@biome.in` Google account** who opens the URL signs in as
+  **PM**: they can author the record (scores, slides, extraction) but cannot
+  manage users. No provisioning step — they just sign in.
+- **Non-Biome accounts** are refused at the Google step.
+
+`ADMIN_EMAILS` takes several addresses if you want, comma-separated. Changing it
+takes effect the next time that person signs in.
+
+> **Worth being clear about:** anyone at Biome who has the URL can sign in and
+> start authoring. There is no per-person approval step. For a POC among
+> colleagues that is usually what you want; if you later need to approve
+> individuals, that is a small change.
+
+To make someone read-only instead, set their row to `PARTNER` in the database
+(see *After it's live* below). `ADMIN_EMAILS` overrides the stored role, so
+listing someone there always wins.
 
 ### 5c. Redeploy
 
@@ -204,8 +267,10 @@ You should land on an empty deals list. **Empty is correct** — the database is
 new. Seeing the page at all means everything is wired up: the app authenticated
 you, connected to Postgres, and rendered.
 
-You are now signed in as a **PM**, which can author the record. The first person
-to sign in with any `@biome.in` account gets the PM role automatically.
+If you set `ADMIN_EMAILS` to your own address, you are signed in as **ADMIN**.
+To confirm, visit `https://<your-domain>/api/auth/session` — it prints your
+session as JSON, including `"role":"ADMIN"`. That is the quickest way to check the
+role wiring without any UI for it.
 
 ---
 
@@ -232,16 +297,21 @@ scroll the log for the first red line.
 **Pushing updates.** Any push to `main` redeploys automatically. Nothing else to
 do.
 
-**Giving someone the partner role.** Everyone starts as PM. To make someone a
-read-only PARTNER, they sign in once, then in Vercel go **Storage** → your
-database → **Data** / query editor and run:
+**Adding another admin.** Edit `ADMIN_EMAILS` to include them, comma-separated.
+No redeploy needed for the value to be read, but they must sign out and back in.
+
+**Making someone read-only.** Everyone defaults to PM. To demote someone to
+PARTNER, they sign in once (so their row exists), then in Vercel go **Storage** →
+your database → the query editor and run:
 
 ```sql
 UPDATE "User" SET role = 'PARTNER' WHERE email = 'someone@biome.in';
 ```
 
-Roles are `PM` (authors), `PARTNER` (reads), `ADMIN` (both, plus user
-management). A role change takes effect the next time they sign in.
+Roles are `PM` (authors the record), `PARTNER` (reads only), `ADMIN` (authors,
+plus user management). Takes effect at their next sign-in. Note `ADMIN_EMAILS`
+overrides the stored role, so remove someone from that list before trying to
+demote them.
 
 **Custom domain.** Settings → Domains. If you add one, go back to stage 4b and
 add a second redirect URI for the new domain.

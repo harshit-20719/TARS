@@ -14,8 +14,10 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { compare } from "bcryptjs";
+import { Role } from "@prisma/client";
 import { db } from "@/lib/db";
 import { authConfig } from "@/lib/auth.config";
+import { isConfiguredAdmin } from "@/lib/adminEmails";
 
 const devCredentialsEnabled =
   process.env.AUTH_DEV_CREDENTIALS === "true" && process.env.NODE_ENV !== "production";
@@ -48,4 +50,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: devCredentialsEnabled
     ? [...authConfig.providers, devCredentials]
     : authConfig.providers,
+  events: {
+    /**
+     * Persist the ADMIN_EMAILS decision to the row.
+     *
+     * The session already got the right role from the jwt callback, so this is
+     * about keeping the database honest: score and slide attribution is read
+     * back by user, and a row claiming PM for someone operating as an admin
+     * would make the audit trail lie. Runs here rather than in the shared config
+     * because it touches Prisma, which the edge runtime cannot load.
+     */
+    async signIn({ user }) {
+      if (!user?.email || !isConfiguredAdmin(user.email)) return;
+      await db.user.updateMany({
+        where: { email: user.email, role: { not: Role.ADMIN } },
+        data: { role: Role.ADMIN },
+      });
+    },
+  },
 });
