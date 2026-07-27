@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getDeal, getRecord } from "@/lib/data";
 import { AddCallForm } from "@/components/authoring/AddCallForm";
 import { RunExtractionButton } from "@/components/authoring/RunExtractionButton";
+import { DeleteCall } from "@/components/authoring/DeleteCall";
 
 export default async function TranscriptPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
@@ -48,14 +49,18 @@ export default async function TranscriptPage({ params }: { params: Promise<{ dea
               </div>
               <div className="card-body">
                 <textarea className="ta" readOnly defaultValue={c.transcript} />
-                {extractionEnabled && (
-                  <div className="ctl-row" style={{ marginTop: 12 }}>
-                    <RunExtractionButton callId={c.id} alreadyExtracted={c.extracted} />
-                    <span className="ctl-note">
-                      {drafted} observation{drafted === 1 ? "" : "s"} filed from this call
-                    </span>
-                  </div>
-                )}
+                <div className="ctl-row" style={{ marginTop: 12 }}>
+                  {extractionEnabled && (
+                    <>
+                      <RunExtractionButton callId={c.id} alreadyExtracted={c.extracted} />
+                      <span className="ctl-note">
+                        {drafted} observation{drafted === 1 ? "" : "s"} filed from this call
+                      </span>
+                    </>
+                  )}
+                  <div className="spacer" style={{ flex: 1 }} />
+                  <DeleteCall dealId={dealId} callId={c.id} callNumber={c.number} draftedCount={drafted} />
+                </div>
               </div>
               <div className="card-note">
                 Speaker labels and timestamps are used when present in the pasted text. File upload and diarization

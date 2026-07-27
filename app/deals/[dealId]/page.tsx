@@ -7,6 +7,7 @@ import { scoreMap } from "@/lib/judgment";
 import { SlideProfile } from "@/components/SlideProfile";
 import { CaptureGrid } from "@/components/CaptureGrid";
 import { DealHeaderForm } from "@/components/authoring/DealHeaderForm";
+import { DeleteDeal } from "@/components/authoring/DeleteDeal";
 
 export default async function OverviewPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
@@ -23,7 +24,10 @@ export default async function OverviewPage({ params }: { params: Promise<{ dealI
         <span className="eyebrow">{deal.founders}</span>
         <h1 className="page-title">{deal.company}</h1>
         <p className="page-lede">{deal.oneLiner}</p>
-        <DealHeaderForm deal={deal} />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <DealHeaderForm deal={deal} />
+          <DeleteDeal record={rec} />
+        </div>
       </div>
 
       <div className="summary">

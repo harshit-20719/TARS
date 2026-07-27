@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Role } from "@prisma/client";
 import { L1_CAP, PILLARS, TRACKS, subByKey } from "@/framework";
 import { db } from "@/lib/db";
-import type { Actor } from "@/lib/authz";
+import { NotAuthorized, type Actor } from "@/lib/authz";
 import { getRecord } from "@/lib/repo/records";
-import { addCall, createDeal, decideObservation, setScore, clearScore } from "./capture";
+import { addCall, createDeal, decideObservation, deleteCall, deleteDeal, setScore, clearScore } from "./capture";
 import { setFounderTypeRead, setSlide } from "./judgment";
 
 /**
@@ -18,11 +18,19 @@ import { setFounderTypeRead, setSlide } from "./judgment";
  */
 
 let pm: Actor;
+let admin: Actor;
+let partner: Actor;
 const createdDealIds: string[] = [];
 
 beforeAll(async () => {
-  const user = await db.user.findUniqueOrThrow({ where: { email: "pm@biome.in" } });
-  pm = { id: user.id, email: user.email, name: user.name, role: Role.PM };
+  const [p, a, pa] = await Promise.all([
+    db.user.findUniqueOrThrow({ where: { email: "pm@biome.in" } }),
+    db.user.findUniqueOrThrow({ where: { email: "harshit.agarwal@biome.in" } }),
+    db.user.findUniqueOrThrow({ where: { email: "partner@biome.in" } }),
+  ]);
+  pm = { id: p.id, email: p.email, name: p.name, role: Role.PM };
+  admin = { id: a.id, email: a.email, name: a.name, role: Role.ADMIN };
+  partner = { id: pa.id, email: pa.email, name: pa.name, role: Role.PARTNER };
 });
 
 afterAll(async () => {
@@ -260,5 +268,122 @@ describe("ReviewBoard payloads", () => {
     await decideObservation(pm, obs.id, { status: "rejected" });
     const row = await db.observation.findUniqueOrThrow({ where: { id: obs.id } });
     expect(row).toMatchObject({ status: "rejected", quote });
+  });
+});
+
+describe("deleting a deal", () => {
+  /**
+   * The delete cascades, so these assert the blast radius as much as the
+   * permission: everything recorded against the deal has to go, and nothing
+   * belonging to another deal may.
+   */
+  async function populated(company: string) {
+    const dealId = await newDeal(company);
+    await addCall(pm, { dealId, number: 1, label: "First", transcript: "[00:01] F: we shipped it." });
+    const obs = await db.observation.create({
+      data: { dealId, callNumber: 1, rubricKey: "ft", subDimensionKey: "earned-insight", quote: "we shipped it", status: "accepted" },
+    });
+    await setScore(pm, { dealId, subDimensionKey: "earned-insight", value: 4, evidenceObsIds: [obs.id] });
+    await setSlide(pm, { dealId, slideKey: "earned-secret", value: 5, ceilingGuard: "Earned insight (4) sets it." });
+    await setFounderTypeRead(pm, {
+      dealId, primary: "Technical", secondary: null,
+      profile: "p", floorDimension: "earned-insight", pmConfirmation: "Confirmed.",
+    });
+    return dealId;
+  }
+
+  it("takes calls, observations, scores, slides, and the founder read with it", async () => {
+    const dealId = await populated("Cascade Test");
+    const survivor = await populated("Cascade Bystander");
+
+    await deleteDeal(pm, dealId);
+
+    expect(await getRecord(dealId)).toBeUndefined();
+    for (const [table, count] of [
+      ["call", () => db.call.count({ where: { dealId } })],
+      ["observation", () => db.observation.count({ where: { dealId } })],
+      ["score", () => db.subDimensionScore.count({ where: { dealId } })],
+      ["slide", () => db.slide.count({ where: { dealId } })],
+      ["founderTypeRead", () => db.founderTypeRead.count({ where: { dealId } })],
+    ] as const) {
+      expect(await count(), `${table} rows left behind`).toBe(0);
+    }
+
+    // The neighbouring deal is untouched.
+    const other = await getRecord(survivor);
+    expect(other?.scores).toHaveLength(1);
+    expect(other?.slides).toHaveLength(1);
+  });
+
+  it("lets a PM delete a deal they opened", async () => {
+    const dealId = await newDeal("Own Deal Test");
+    await expect(deleteDeal(pm, dealId)).resolves.toBeUndefined();
+  });
+
+  it("refuses a PM deleting someone else's deal", async () => {
+    // Owned by the other PM-capable actor, so the role is fine and only the
+    // ownership check can reject it.
+    const dealId = await createDeal(admin, {
+      company: "Admin Owned Test", oneLiner: "x", founders: "y",
+    });
+    createdDealIds.push(dealId);
+    await expect(deleteDeal(pm, dealId)).rejects.toThrow(NotAuthorized);
+    expect(await getRecord(dealId)).toBeTruthy();
+  });
+
+  it("lets an ADMIN delete anyone's deal", async () => {
+    const dealId = await newDeal("Admin Deletes Test");
+    await expect(deleteDeal(admin, dealId)).resolves.toBeUndefined();
+    expect(await getRecord(dealId)).toBeUndefined();
+  });
+
+  it("refuses a PARTNER outright", async () => {
+    const dealId = await newDeal("Partner Delete Test");
+    await expect(deleteDeal(partner, dealId)).rejects.toThrow(NotAuthorized);
+  });
+
+  it("reserves an unowned deal — the seeded fixtures — for an ADMIN", async () => {
+    // The fixtures carry a display name rather than an owner relation, so nobody
+    // can claim them.
+    const dealId = await newDeal("Unowned Test");
+    await db.deal.update({ where: { id: dealId }, data: { ownerId: null } });
+    await expect(deleteDeal(pm, dealId)).rejects.toThrow(/no owner/);
+    await expect(deleteDeal(admin, dealId)).resolves.toBeUndefined();
+  });
+
+  it("reports a deal that is not there rather than succeeding quietly", async () => {
+    await expect(deleteDeal(admin, "no-such-deal")).rejects.toThrow(/no such deal/);
+  });
+});
+
+describe("removing a call", () => {
+  it("keeps the observations drafted from it", async () => {
+    // They are keyed by call number, so an accepted quote is not lost when the
+    // transcript is re-pasted.
+    const dealId = await newDeal("Call Removal Test");
+    const callId = await addCall(pm, {
+      dealId, number: 1, label: "First", transcript: "[00:01] F: four years inside.",
+    });
+    await db.observation.create({
+      data: { dealId, callNumber: 1, rubricKey: "ft", subDimensionKey: "earned-insight", quote: "four years inside", status: "accepted" },
+    });
+
+    await deleteCall(pm, callId);
+
+    const rec = await getRecord(dealId);
+    expect(rec!.calls).toHaveLength(0);
+    expect(rec!.observations).toHaveLength(1);
+  });
+
+  it("frees the call number for a re-paste", async () => {
+    const dealId = await newDeal("Call Repaste Test");
+    const callId = await addCall(pm, { dealId, number: 1, label: "First", transcript: "wrong text" });
+    await expect(
+      addCall(pm, { dealId, number: 1, label: "First", transcript: "right text" }),
+    ).rejects.toThrow(/already exists/);
+    await deleteCall(pm, callId);
+    await expect(
+      addCall(pm, { dealId, number: 1, label: "First", transcript: "right text" }),
+    ).resolves.toBeTruthy();
   });
 });

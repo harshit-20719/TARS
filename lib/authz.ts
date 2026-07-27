@@ -56,3 +56,30 @@ export function assertMayAuthor(actor: Actor): void {
     );
   }
 }
+
+/**
+ * Deleting a whole deal record is a narrower permission than editing one.
+ *
+ * Authoring is a shared activity — any PM may score any deal, which is what makes
+ * a second read possible. Destroying the record is not: it takes every score,
+ * slide, and accepted observation with it, and there is no undo. So a PM may
+ * delete a deal they own (their own practice run, a duplicate they opened by
+ * mistake) and an ADMIN may delete any. A PM cannot delete someone else's work.
+ *
+ * A deal with no owner — the fixtures, which carry a display name rather than a
+ * user relation — is ADMIN-only for the same reason: nobody can claim it.
+ */
+export function canDeleteDeal(actor: Actor, ownerId: string | null): boolean {
+  if (actor.role === Role.ADMIN) return true;
+  return canAuthorRecord(actor.role) && ownerId !== null && ownerId === actor.id;
+}
+
+export function assertMayDeleteDeal(actor: Actor, ownerId: string | null): void {
+  if (!canDeleteDeal(actor, ownerId)) {
+    throw new NotAuthorized(
+      ownerId === null
+        ? "This deal has no owner, so only an ADMIN can delete it."
+        : "You can only delete a deal you own. Ask an ADMIN to remove someone else's.",
+    );
+  }
+}

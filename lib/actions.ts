@@ -77,6 +77,23 @@ export async function updateDealAction(dealId: string, raw: unknown): Promise<Ac
   }
 }
 
+/**
+ * Delete a deal and everything on it.
+ *
+ * Redirects rather than revalidating: the page the user is standing on no longer
+ * exists, so re-rendering it would 404. The client navigates on `ok`.
+ */
+export async function deleteDealAction(dealId: string): Promise<ActionResult> {
+  try {
+    const actor = await requireAuthor();
+    await capture.deleteDeal(actor, dealId);
+    revalidatePath("/deals");
+    return { ok: true };
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 // -------------------------------------------------------- calls & extraction
 
 export async function addCallAction(raw: unknown): Promise<ActionResult<string>> {
@@ -107,6 +124,17 @@ export async function runExtractionAction(
         dropped: summary.droppedQuotes.length,
       },
     };
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+export async function deleteCallAction(dealId: string, callId: string): Promise<ActionResult> {
+  try {
+    const actor = await requireAuthor();
+    await capture.deleteCall(actor, callId);
+    revalidateDeal(dealId);
+    return { ok: true };
   } catch (e) {
     return toResult(e);
   }

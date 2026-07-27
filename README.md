@@ -25,7 +25,7 @@ Needs Postgres. Sign in with any seeded user (`pm@biome.in`, password `tars-dev`
 [`docs/runbooks/deploy-vercel.md`](docs/runbooks/deploy-vercel.md).
 
 ```bash
-npm test         # 158 tests, against a real Postgres test database
+npm test         # 176 tests, against a real Postgres test database
 npm run typecheck
 ```
 
@@ -64,6 +64,10 @@ code rather than by convention:
   constraint.
 - **Authorship is server-side.** PM and ADMIN author; PARTNER reads. Checked on
   every mutation, not by hiding a button.
+- **Deletion is narrower than authoring.** Any PM may score any deal — that is
+  what makes a second read possible — but a PM may only delete a deal they own.
+  An ADMIN may delete any. The delete cascades, so the UI asks for the company
+  name typed out rather than a confirm click.
 
 The seam: the UI reads `lib/data.ts` (`listDeals`, `getDeal`, `getRecord`) and
 nothing else. Swapping mock literals for database reads changed only those three

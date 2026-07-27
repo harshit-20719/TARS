@@ -18,7 +18,7 @@ import { subByKey } from "@/framework";
 import { encodeScoreValue, parseRecordDate } from "@/lib/domain/codec";
 import { assertLayer, assertScoreValue } from "@/lib/domain/rules";
 import { RuleViolation } from "@/lib/domain/rules";
-import { assertMayAuthor, type Actor } from "@/lib/authz";
+import { assertMayAuthor, assertMayDeleteDeal, type Actor } from "@/lib/authz";
 import {
   extractFromTranscript,
   normaliseForComparison,
@@ -128,9 +128,34 @@ export async function addCall(actor: Actor, raw: unknown) {
   return call.id;
 }
 
+/**
+ * Remove a call and its transcript.
+ *
+ * The observations drafted from it are left alone deliberately. They carry a
+ * `callNumber`, not a foreign key, so they survive — and that is the right
+ * outcome: a PM who has already accepted a quote as evidence should not lose it
+ * because the transcript it came from was re-pasted. Deleting the deal is the way
+ * to discard everything.
+ */
 export async function deleteCall(actor: Actor, callId: string) {
   assertMayAuthor(actor);
   await db.call.delete({ where: { id: callId } });
+}
+
+/**
+ * Delete a deal and everything recorded against it.
+ *
+ * Irreversible, and it cascades: calls, observations, claims, scores and their
+ * evidence links, slides, and the founder-type read all go. That is the point —
+ * a practice run should leave nothing behind — but it is also why the permission
+ * is narrower than authoring (see canDeleteDeal) and why the UI makes you type
+ * the company name rather than clicking a confirm.
+ */
+export async function deleteDeal(actor: Actor, dealId: string) {
+  const deal = await db.deal.findUnique({ where: { id: dealId }, select: { ownerId: true } });
+  if (!deal) throw new RuleViolation(`no such deal: ${dealId}`, "dealId");
+  assertMayDeleteDeal(actor, deal.ownerId);
+  await db.deal.delete({ where: { id: dealId } });
 }
 
 // --------------------------------------------------------------- extraction
