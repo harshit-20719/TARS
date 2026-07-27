@@ -172,29 +172,45 @@ stops working immediately.
 
 ### 4b. Create the Google credentials
 
+Google has renamed this area to **Google Auth Platform**. Opening
+*APIs & Services → OAuth consent screen* on a fresh project shows
+**"not configured yet"** with a **Get started** button — that is the expected
+starting state, not an error.
+
 1. Go to **https://console.cloud.google.com**.
-2. At the top left, click the project dropdown → **New Project**. Name it
-   `TARS` → **Create**. Wait for it, then make sure it's selected.
-3. In the left menu go to **APIs & Services** → **OAuth consent screen**.
-   - User type: **Internal** if `biome.in` is a Google Workspace domain — pick
-     this if you can, it's simpler. Otherwise **External**.
-   - App name: `TARS`. Support email: your address. Developer email: your
-     address. Click through **Save and Continue** to the end.
-4. In the left menu go to **Credentials** → **Create Credentials** → **OAuth
-   client ID**.
+2. Top left, click the project dropdown → **New Project**. Name it `TARS` →
+   **Create**. Wait for the notification, then **reopen the dropdown and select
+   `TARS`** — the console often leaves you on the previous project, and
+   everything below would land in the wrong place.
+3. Left menu → **APIs & Services** → **OAuth consent screen** → **Get started**.
+   Work through the four steps:
+   - **App Information** — App name `TARS`, your address as support email
+   - **Audience** — **Internal** if `biome.in` is a Google Workspace domain (no
+     verification, Biome accounts only). **External** if Internal is unavailable
+     — see the note below.
+   - **Contact Information** — your address
+   - **Finish** — accept the User Data Policy → **Create**
+4. In the Google Auth Platform menu, go to **Clients** → **+ Create client**.
+   (This is where OAuth client IDs live now; the older
+   *Credentials → OAuth client ID* path reaches the same thing.)
    - Application type: **Web application**
    - Name: `TARS Web`
-   - Under **Authorised redirect URIs** click **Add URI** and enter exactly,
-     replacing the domain with yours:
+   - **Authorised redirect URIs** → **+ Add URI** → enter exactly, with your own
+     production domain:
 
      ```
-     https://tars-abc123.vercel.app/api/auth/callback/google
+     https://tars-henna.vercel.app/api/auth/callback/google
      ```
 
-     The `/api/auth/callback/google` part must be exact.
-   - Click **Create**.
-5. A box appears with **Client ID** and **Client secret**. Keep it open — you
-   need both in the next stage.
+     The `/api/auth/callback/google` part must be character-exact.
+   - **Create**
+5. Copy the **Client ID** and **Client secret** — both are needed in stage 5.
+
+> **If you had to choose External**, the app starts in **Testing**, where only
+> listed test users can sign in. Go to **Audience** and either **Publish app** —
+> safe, because TARS requests only `email` and `profile`, which are non-sensitive
+> scopes needing no Google verification — or add each colleague under **Test
+> users**. Skip this entirely if you chose Internal.
 
 ---
 
