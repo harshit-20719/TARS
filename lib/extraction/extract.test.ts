@@ -5,6 +5,7 @@ import {
   extractFromTranscript,
   isVerbatim,
   normaliseForComparison,
+  thinkingConfigFor,
   verifyDrafts,
   type ExtractionClient,
 } from "./extract";
@@ -234,5 +235,71 @@ describe("the output schema", () => {
     // And nothing numeric anywhere — every leaf is a string or an enum of
     // strings, so there is no field a number could be written into at all.
     expect(JSON.stringify(ExtractionOutputSchema.shape)).not.toMatch(/"type":"(number|int)"/);
+  });
+});
+
+describe("thinking config per model generation", () => {
+  it("asks 4.6-and-later models for adaptive thinking at an effort level", () => {
+    for (const model of ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-4-6"]) {
+      expect(thinkingConfigFor(model), model).toEqual({
+        thinking: { type: "adaptive" },
+        effort: "medium",
+      });
+    }
+  });
+
+  /**
+   * The case that made this function necessary. Haiku 4.5 rejects `effort`
+   * outright and does not accept adaptive thinking — so pasting EXTRACTION_MODEL
+   * straight into the request would 400, not merely run worse. It is also the
+   * model someone reaches for precisely to make this step cheaper.
+   */
+  it.each(["claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-sonnet-4-5", "claude-opus-4-1"])(
+    "gives %s a fixed budget and no effort level",
+    (model) => {
+      const config = thinkingConfigFor(model);
+      expect(config).toEqual({ thinking: { type: "enabled", budget_tokens: 4000 } });
+      expect(config.effort).toBeUndefined();
+    },
+  );
+
+  it("does not read the 5 in a 4-5 id as the 5 series", () => {
+    // The bug this function was written to make impossible.
+    expect(thinkingConfigFor("claude-haiku-4-5").thinking).not.toEqual({ type: "adaptive" });
+    expect(thinkingConfigFor("claude-opus-5").thinking).toEqual({ type: "adaptive" });
+  });
+
+  it("treats an unrecognised id as modern, the likelier direction", () => {
+    expect(thinkingConfigFor("claude-something-new").effort).toBe("medium");
+  });
+
+  it("keeps the pre-4.6 budget below max_tokens, which the API requires", () => {
+    const budget = (thinkingConfigFor("claude-haiku-4-5").thinking as { budget_tokens: number })
+      .budget_tokens;
+    expect(budget).toBeLessThan(16000);
+  });
+
+  it("sends what the model generation accepts, end to end", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const client: ExtractionClient = {
+      messages: {
+        parse: async (params) => {
+          seen.push(params);
+          return { parsed_output: { observations: [], claims: [] }, stop_reason: "end_turn" };
+        },
+      },
+    };
+    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, model: "claude-haiku-4-5" });
+    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, model: "claude-opus-5" });
+
+    const [haiku, opus] = seen;
+    expect(haiku.thinking).toEqual({ type: "enabled", budget_tokens: 4000 });
+    expect((haiku.output_config as Record<string, unknown>).effort).toBeUndefined();
+    expect(opus.thinking).toEqual({ type: "adaptive" });
+    expect((opus.output_config as Record<string, unknown>).effort).toBe("medium");
+    // The schema travels either way — the authorship rule is not model-dependent.
+    for (const params of seen) {
+      expect((params.output_config as Record<string, unknown>).format).toBeTruthy();
+    }
   });
 });

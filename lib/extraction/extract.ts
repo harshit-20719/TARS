@@ -27,6 +27,44 @@ import { EXTRACTION_SYSTEM_PROMPT, buildExtractionUserMessage } from "./prompt";
 /** Default model. Sonnet 5 is the documented high-volume swap (spec D6). */
 export const DEFAULT_EXTRACTION_MODEL = "claude-opus-5";
 
+/**
+ * How to ask a given model to think.
+ *
+ * The two knobs are not portable across model generations, and getting them
+ * wrong is a 400 rather than a degradation — so EXTRACTION_MODEL cannot just be
+ * pasted into the request. Claude 4.6 and later take `thinking: {adaptive}` and
+ * an `effort` level; earlier models take a fixed `budget_tokens` and reject
+ * `effort` outright. Haiku 4.5 is in the second group, which is exactly the
+ * model someone reaches for to make this step cheaper.
+ *
+ * Returning the request fragment rather than a pair of flags keeps the branch in
+ * one place: the call site spreads whatever this hands back.
+ */
+export function thinkingConfigFor(model: string): Record<string, unknown> {
+  /**
+   * Read the generation out of the id rather than pattern-matching the whole
+   * string. A looser regex is easy to get wrong in the direction that matters:
+   * "claude-haiku-4-5" ends in "-5" and will happily match a rule meant for the
+   * 5 series, which is precisely the model this branch exists for.
+   */
+  const parsed = /^claude-(?:[a-z]+-)?(\d+)(?:-(\d+))?/.exec(model);
+  const major = parsed ? Number(parsed[1]) : 0;
+  const minor = parsed?.[2] !== undefined ? Number(parsed[2]) : 0;
+
+  // An id this does not recognise is far likelier to be newer than older, so the
+  // unknown case takes the modern shape.
+  const adaptive = !parsed || major >= 5 || (major === 4 && minor >= 6);
+  if (adaptive) {
+    return { thinking: { type: "adaptive" }, effort: "medium" };
+  }
+  /**
+   * Pre-4.6: a fixed budget, which must be strictly less than max_tokens. 4000
+   * is enough for the model to work through a transcript without eating the
+   * budget the drafts themselves need.
+   */
+  return { thinking: { type: "enabled", budget_tokens: 4000 } };
+}
+
 export class ExtractionError extends Error {
   constructor(message: string) {
     super(message);
@@ -123,13 +161,18 @@ export async function extractFromTranscript(
   // An empty EXTRACTION_MODEL should fall through to the default, hence || here.
   const model = deps.model ?? (process.env.EXTRACTION_MODEL || DEFAULT_EXTRACTION_MODEL);
 
+  const { thinking, effort } = thinkingConfigFor(model);
+
   const response = await client.messages.parse({
     model,
+    // Under Haiku 4.5's 64k output ceiling, and comfortably above the pre-4.6
+    // thinking budget it has to exceed.
     max_tokens: 16000,
     system: EXTRACTION_SYSTEM_PROMPT,
-    thinking: { type: "adaptive" },
+    thinking,
     output_config: {
-      effort: "medium",
+      // Omitted entirely on pre-4.6 models, which reject it.
+      ...(effort ? { effort } : {}),
       format: zodOutputFormat(ExtractionOutputSchema),
     },
     messages: [{ role: "user", content: buildExtractionUserMessage(input) }],

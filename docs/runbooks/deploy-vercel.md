@@ -38,16 +38,27 @@ the next page load.
 When you do turn extraction on, a rough per-transcript cost — a 45-minute call,
 which is about 15k tokens in and 5k out:
 
-| Model | Per transcript |
-|---|---|
-| `claude-opus-5` (default) | ~20¢ |
-| `claude-sonnet-5` | ~8¢ |
+| Model | Per transcript | Notes |
+|---|---|---|
+| `claude-opus-5` (default) | ~20¢ | Strongest at picking the right row of 41 |
+| `claude-sonnet-5` | ~8¢ | Introductory pricing until 31 Aug 2026, then ~12¢ |
+| `claude-haiku-4-5` | ~4¢ | Cheapest, and the weakest at the 41-way mapping |
 
-So ten transcripts is about $2, or $0.80 on Sonnet. To use Sonnet, add an
-environment variable `EXTRACTION_MODEL` = `claude-sonnet-5`. Nothing else
-changes. Opus is the default because a PM reads every drafted quote and a
-mis-mapped observation costs more attention than the difference in cents — but
-for a POC either is defensible, and it is a one-line switch either way.
+So ten transcripts is about $2 on Opus, 80¢ on Sonnet, 40¢ on Haiku. Set
+`EXTRACTION_MODEL` to switch; nothing else changes.
+
+Opus is the default because a PM reads every drafted quote, and a mis-mapped
+observation costs more attention than the difference in cents. The gap that
+matters is not the quoting — that is easy, and quotes that are not verbatim get
+dropped before they are written either way. It is choosing the right one of
+forty-one sub-dimensions from anchor text, and tagging whether the founder
+volunteered a claim or merely agreed with the interviewer's framing. Both are
+judgment, and both are where a smaller model gives up the most.
+
+Note the arithmetic before optimising: Haiku saves about 4¢ a transcript against
+Sonnet at current introductory pricing. A hundred transcripts is $4 of
+difference — less than the minimum credit purchase. Sonnet 5 is the recommended
+swap.
 
 > Anthropic sells prepaid credits with a minimum purchase (usually \$5), so
 > that is the practical floor for trying extraction at all.
