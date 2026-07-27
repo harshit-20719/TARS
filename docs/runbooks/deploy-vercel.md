@@ -206,11 +206,13 @@ add a second redirect URI for the new domain.
 
 ## Notes for later
 
-**Migrations run during the build.** The build command is
-`prisma generate && prisma migrate deploy && next build`, so schema changes apply
-themselves on deploy. The trade-off: a broken migration fails the deploy rather
-than half-applying. That is the safer failure for a pilot, but as the team grows
-you may want to move migrations to a deliberate step.
+**Migrations run during the build.** Vercel prefers a `vercel-build` script over
+`build` when one exists, and this repo has one:
+`prisma generate && prisma migrate deploy && next build`. So schema changes apply
+themselves on deploy, with no command for you to remember, while a plain local
+`npm run build` still works without a database. The trade-off: a broken migration
+fails the deploy rather than half-applying. That is the safer failure for a pilot,
+but as the team grows you may want to move migrations to a deliberate step.
 
 **Preview deployments share the production database** with the default Vercel
 setup. Fine for now; worth separating before anyone tests destructive changes on
