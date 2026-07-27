@@ -18,7 +18,8 @@ import { authConfig } from "@/lib/auth.config";
 export const { auth: middleware } = NextAuth(authConfig);
 
 export const config = {
-  // Everything except the auth endpoints themselves (which must stay reachable
-  // to sign in) and Next's own static assets.
-  matcher: ["/((?!api/auth|_next/static|_next/image|favicon.ico).*)"],
+  // Everything except: the auth endpoints (which must stay reachable in order to
+  // sign in), the health check (most needed when auth is the broken thing — it
+  // reports presence only, never values), and Next's own static assets.
+  matcher: ["/((?!api/auth|api/health|_next/static|_next/image|favicon.ico).*)"],
 };
