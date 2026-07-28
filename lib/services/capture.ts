@@ -380,7 +380,15 @@ export async function runExtractionForCall(
         skippedAlreadyRuledOn: result.observations.length - fresh.length,
       };
     },
-    { timeout: 20_000, maxWait: 10_000 },
+    /**
+     * Sized against the function's sixty-second ceiling, not chosen freely.
+     * Extraction is bounded by BLOCK_TIMEOUT_MS (30s, concurrent across blocks), so
+     * this phase gets a ceiling that keeps the worst case comfortably inside the
+     * free tier's limit — 30 + 12 — rather than requiring a paid one. The writes
+     * are batched into four queries, so twelve seconds is a failure ceiling, not an
+     * expected duration.
+     */
+    { timeout: 12_000, maxWait: 5_000 },
   );
 
   return { ...result, ...written };

@@ -158,8 +158,13 @@ export function describeApiFailure(e: unknown): string {
  * function died, so the five blocks that had already answered were never written —
  * defeating the point of running them concurrently and keeping partial results. A
  * bounded wait makes a slow block behave like any other failed block.
+ *
+ * Sized so the whole run fits the free tier's ceiling rather than needing a paid
+ * one. The blocks are concurrent, so the extraction phase is bounded by this single
+ * number, not by six of them; adding the database phase's own ceiling
+ * (see runExtractionForCall) leaves headroom under sixty seconds.
  */
-export const BLOCK_TIMEOUT_MS = 35_000;
+export const BLOCK_TIMEOUT_MS = 30_000;
 
 export interface ExtractionClient {
   messages: {
