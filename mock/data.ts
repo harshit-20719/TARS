@@ -114,7 +114,9 @@ const HALTEN_SCORES: SubDimensionScore[] = [
   { dealId: "halten", subDimensionKey: "pricing-packaging", scoreType: "scale", value: 3, evidenceObsIds: ["o10"], layer: "L1" },
 
   { dealId: "halten", subDimensionKey: "capital-cleanliness", scoreType: "binary", value: "unv", evidenceObsIds: [], layer: "L1" }, // incomplete
-  { dealId: "halten", subDimensionKey: "ip-ownership", scoreType: "binary", value: "unv", evidenceObsIds: ["o9"], flag: true, layer: "L1" },
+  // Advance-with-condition, with the condition written out — a flagged score whose
+  // note is missing is a state the service refuses, so the fixture must not model one.
+  { dealId: "halten", subDimensionKey: "ip-ownership", scoreType: "binary", value: "unv", evidenceObsIds: ["o9"], flag: true, flagNote: "Prior-employer IP boundary confirmed in writing before term sheet.", layer: "L1" },
   { dealId: "halten", subDimensionKey: "india-incorporation", scoreType: "binary", value: "pass", evidenceObsIds: ["o9"], layer: "L1" },
   { dealId: "halten", subDimensionKey: "regulated-readiness", scoreType: "binary", value: "unv", evidenceObsIds: [], layer: "L1" }, // incomplete
   // Cap-table health is the other 1–5 row with a kill at 1.

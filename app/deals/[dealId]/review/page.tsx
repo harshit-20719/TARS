@@ -1,12 +1,7 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getRecord } from "@/lib/data";
 import { ReviewBoard } from "@/components/ReviewBoard";
-
-const ORIGIN_CLASS: Record<string, string> = {
-  "founder-volunteered": "good",
-  "founder-confirmed-after-PM-framing": "warn",
-  "machine-inferred": "pending",
-};
 
 export default async function ReviewPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
@@ -65,48 +60,21 @@ export default async function ReviewPage({ params }: { params: Promise<{ dealId:
             </div>
           </div>
 
-          <div className="grid-2">
-            <ReviewBoard dealId={dealId} observations={rec.observations} />
+          {/*
+            The claim ledger used to sit here as a second column, showing each
+            claim's anchor as a raw database id. It now has its own page, which
+            shows the quote instead — so this page is the exception queue and
+            nothing else, and there is only one ledger to trust.
+          */}
+          <ReviewBoard dealId={dealId} observations={rec.observations} />
 
-            <div>
-              <div className="sc-block-title" style={{ marginTop: 0 }}>
-                Claim ledger
-              </div>
-              <div className="card">
-                <div className="card-head">
-                  <h2>Claims</h2>
-                  <span className="count">status: claimed</span>
-                </div>
-                <div className="card-body">
-                  {rec.claims.map((c) => {
-                    const anchor = rec.observations.find((o) => o.id === c.anchorObsId);
-                    return (
-                      <div className="claim" key={c.id}>
-                        <div className="c-body">
-                          <div className="c-text">{c.text}</div>
-                          <div className="c-meta">
-                            <span className={`chip ${ORIGIN_CLASS[c.originTag]} origin`}>{c.originTag}</span>
-                            <span className="chip line">claimed</span>
-                            {anchor && (
-                              <span className="chip line" title={anchor.quote}>
-                                ↳ {c.anchorObsId}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="card-note">
-                  Origin tags: <b style={{ color: "var(--good)" }}>founder-volunteered</b>,{" "}
-                  <b style={{ color: "var(--warn)" }}>founder-confirmed-after-PM-framing</b>,{" "}
-                  <b style={{ color: "var(--pending)" }}>machine-inferred</b>. Claim <em>validated / refuted</em> and
-                  the verification artefact come at L2.
-                </div>
-              </div>
+          {rec.claims.length > 0 && (
+            <div className="card-note" style={{ marginTop: 14 }}>
+              {rec.claims.length} claim{rec.claims.length === 1 ? "" : "s"} were drafted alongside these
+              observations. They live in the{" "}
+              <Link href={`/deals/${dealId}/claims`}>claim ledger</Link>, with the quote each one rests on.
             </div>
-          </div>
+          )}
       </>
     </div>
   );

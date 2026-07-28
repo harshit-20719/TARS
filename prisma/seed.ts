@@ -112,6 +112,11 @@ async function seedRecord() {
         speaker: o.speaker ?? null,
         timestamp: o.timestamp ?? null,
         status: o.status,
+        // Written explicitly rather than left to default. A seeded row that omits
+        // these looks exactly like a row from before the columns existed, which is
+        // the state the re-extract predicate cannot see.
+        confidence: o.confidence ?? null,
+        mappingNote: o.mappingNote ?? null,
         layer: o.layer,
       };
       await db.observation.upsert({
@@ -152,6 +157,9 @@ async function seedRecord() {
         // migration and lib/domain/codec.ts both police the pair.
         value: String(s.value),
         flag: s.flag ?? false,
+        // A flagged score with no note is a state the service refuses, so the seed
+        // has to carry the note rather than leaving it null.
+        flagNote: s.flagNote ?? null,
       };
       const score = await db.subDimensionScore.upsert({
         where: key,
@@ -183,6 +191,7 @@ async function seedRecord() {
         provisionalValue: sl.provisionalValue ?? null,
         lens: fromLens(sl.lens),
         ceilingGuard: sl.ceilingGuard,
+        guardConfirmed: sl.guardConfirmed ?? false,
       };
       await db.slide.upsert({
         where: {

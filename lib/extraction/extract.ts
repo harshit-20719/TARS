@@ -150,9 +150,23 @@ export function describeApiFailure(e: unknown): string {
  * The slice of the Anthropic client this service uses. Narrow on purpose so a
  * test stub is a few lines rather than a mock of the whole SDK.
  */
+/**
+ * How long one block's call may take before it is abandoned.
+ *
+ * The SDK's default is about ten minutes, against a function that is killed at
+ * sixty seconds. That default turned one slow block into a total loss: the whole
+ * function died, so the five blocks that had already answered were never written —
+ * defeating the point of running them concurrently and keeping partial results. A
+ * bounded wait makes a slow block behave like any other failed block.
+ */
+export const BLOCK_TIMEOUT_MS = 35_000;
+
 export interface ExtractionClient {
   messages: {
-    parse(params: Record<string, unknown>): Promise<{
+    parse(
+      params: Record<string, unknown>,
+      options?: { timeout?: number },
+    ): Promise<{
       /**
        * A block's output, so no `rubricKey` — the caller knows which block it
        * asked, and adds it. Asking the model for a value already known would only
@@ -188,6 +202,15 @@ export interface ExtractionResult {
    * like the transcript simply had nothing in it.
    */
   failedBlocks: { rubricKey: string; label: string; reason: string }[];
+  /**
+   * Which macro-dimensions returned an answer.
+   *
+   * The caller needs this, not just the failures: a re-run must replace only the
+   * rows for blocks it actually re-read. Without it, re-running after a partial
+   * failure deleted the previous run's evidence for the blocks that had worked and
+   * put nothing back — losing real work while looking like a successful retry.
+   */
+  succeededBlocks: string[];
 }
 
 // ------------------------------------------------------------ verbatim guard
@@ -274,12 +297,16 @@ export async function extractFromTranscript(
 
   const merged: ExtractionOutput = { observations: [], claims: [] };
   const failedBlocks: ExtractionResult["failedBlocks"] = [];
+  const succeededBlocks: string[] = [];
 
   settled.forEach((outcome, i) => {
     const rubric = blocks[i];
     if (outcome.status === "fulfilled") {
       merged.observations.push(...outcome.value.observations);
       merged.claims.push(...outcome.value.claims);
+      // Recorded even when the block found nothing: "read it and there was nothing
+      // there" and "never read it" must not collapse into the same state.
+      succeededBlocks.push(rubric.key);
       return;
     }
     const reason =
@@ -289,13 +316,17 @@ export async function extractFromTranscript(
     failedBlocks.push({ rubricKey: rubric.key, label: rubric.label, reason });
   });
 
-  // Every block failing is not a partial result, it is a failed run — and the
-  // reasons will all be the same one (a bad key, no credit), so report it as such.
-  if (failedBlocks.length === blocks.length) {
-    throw new ExtractionError(failedBlocks[0]?.reason ?? "extraction failed");
+  // Every block failing is not a partial result, it is a failed run. Usually one
+  // cause (a bad key, no credit); when the causes differ, say all of them rather
+  // than picking whichever settled first.
+  if (succeededBlocks.length === 0) {
+    const reasons = [...new Set(failedBlocks.map((f) => f.reason))];
+    throw new ExtractionError(
+      reasons.length === 1 ? reasons[0] : `every block failed: ${reasons.join("; ")}`,
+    );
   }
 
-  return { ...verifyDrafts(input.transcript, merged), failedBlocks };
+  return { ...verifyDrafts(input.transcript, merged), failedBlocks, succeededBlocks };
 }
 
 /**
@@ -332,7 +363,7 @@ async function extractBlock(
 
   let response: Awaited<ReturnType<ExtractionClient["messages"]["parse"]>>;
   try {
-    response = await client.messages.parse(params);
+    response = await client.messages.parse(params, { timeout: BLOCK_TIMEOUT_MS });
   } catch (e) {
     // The one statement in this block is the API call, so everything from it is
     // an extraction failure — reported as a value the form can render instead of
@@ -356,10 +387,11 @@ async function extractBlock(
   }
 
   // The block schema omits rubricKey — it is implied by which call this was, so
-  // asking the model for it would only create a way for it to be wrong.
+  // asking the model for it would only create a way for it to be wrong. Stamped on
+  // claims as well as observations, because the claim-to-anchor match needs it.
   return {
     observations: parsed.observations.map((o) => ({ ...o, rubricKey: rubric.key })),
-    claims: parsed.claims,
+    claims: parsed.claims.map((c) => ({ ...c, rubricKey: rubric.key })),
   };
 }
 
@@ -370,7 +402,7 @@ async function extractBlock(
 export function verifyDrafts(
   transcript: string,
   parsed: ExtractionOutput,
-): Omit<ExtractionResult, "failedBlocks"> {
+): Omit<ExtractionResult, "failedBlocks" | "succeededBlocks"> {
   const observations: DraftObservation[] = [];
   const droppedQuotes: string[] = [];
 

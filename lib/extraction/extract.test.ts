@@ -129,7 +129,7 @@ describe("verifyDrafts", () => {
       output({
         observations: [paraphrased],
         claims: [
-          { text: "Four years of operator experience.", anchorQuote: paraphrased.quote, originTag: "founder-volunteered" },
+          { text: "Four years of operator experience.", anchorQuote: paraphrased.quote, originTag: "founder-volunteered", rubricKey: "ft" },
         ],
       }),
     );
@@ -144,7 +144,7 @@ describe("verifyDrafts", () => {
       output({
         observations: [good],
         claims: [
-          { text: "Four years of operator experience.", anchorQuote: good.quote, originTag: "founder-volunteered" },
+          { text: "Four years of operator experience.", anchorQuote: good.quote, originTag: "founder-volunteered", rubricKey: "ft" },
         ],
       }),
     );

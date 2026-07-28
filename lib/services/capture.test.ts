@@ -200,6 +200,7 @@ describe("extraction persistence", () => {
             text: "The matcher reconciles continuously rather than in a nightly batch.",
             anchorQuote: verbatim.quote,
             originTag: "founder-volunteered",
+            rubricKey: "pt",
           },
         ],
       }),
@@ -282,6 +283,57 @@ describe("extraction persistence", () => {
     expect(score.evidence).toEqual([]);
   });
 
+  /**
+   * The order that matters, and the one the old test had backwards: score first,
+   * reject second. Evidence is frozen at save time, so the rejection has to reach
+   * back and remove the citation — otherwise the scorecard keeps printing a quote
+   * its author threw out, and the row still counts as complete.
+   */
+  it("rejecting a quote after scoring removes it from the score", async () => {
+    const { dealId, callId } = await seedCall("Reject After Score Test");
+    await runExtractionForCall(pm, callId, {
+      client: stubClient({ observations: [verbatim], claims: [] }),
+    });
+    await setScore(pm, { dealId, subDimensionKey: "compounding-moat", value: 4 });
+
+    const before = await db.subDimensionScore.findFirstOrThrow({
+      where: { dealId, subDimensionKey: "compounding-moat" },
+      include: { evidence: true },
+    });
+    expect(before.evidence).toHaveLength(1);
+
+    const o = await db.observation.findFirstOrThrow({ where: { dealId } });
+    await decideObservation(pm, o.id, { status: "rejected" });
+
+    const after = await db.subDimensionScore.findFirstOrThrow({
+      where: { dealId, subDimensionKey: "compounding-moat" },
+      include: { evidence: true },
+    });
+    expect(after.evidence).toEqual([]);
+  });
+
+  /** Moving a quote takes it off the row it left, for the same reason. */
+  it("moving a quote after scoring removes it from the row it left", async () => {
+    const { dealId, callId } = await seedCall("Move After Score Test");
+    await runExtractionForCall(pm, callId, {
+      client: stubClient({ observations: [verbatim], claims: [] }),
+    });
+    await setScore(pm, { dealId, subDimensionKey: "compounding-moat", value: 4 });
+
+    const o = await db.observation.findFirstOrThrow({ where: { dealId } });
+    await decideObservation(pm, o.id, {
+      status: "edited",
+      subDimensionKey: "earned-insight",
+      rubricKey: "ft",
+    });
+
+    const old = await db.subDimensionScore.findFirstOrThrow({
+      where: { dealId, subDimensionKey: "compounding-moat" },
+      include: { evidence: true },
+    });
+    expect(old.evidence).toEqual([]);
+  });
+
   // The authorship rule (spec R5): the machine drafts, it never scores. If this
   // ever fails, the framework has been broken, not just the code.
   it("writes no scores at all", async () => {
@@ -290,7 +342,7 @@ describe("extraction persistence", () => {
       client: stubClient({
         observations: [verbatim],
         claims: [
-          { text: "Continuous matching.", anchorQuote: verbatim.quote, originTag: "machine-inferred" },
+          { text: "Continuous matching.", anchorQuote: verbatim.quote, originTag: "machine-inferred", rubricKey: "pt" },
         ],
       }),
     });
@@ -364,6 +416,150 @@ describe("extraction persistence", () => {
     // Re-mapping retires the machine's metadata — the note described the old row.
     expect(survivor!.confidence).toBeNull();
     expect(survivor!.mappingNote).toBeNull();
+  });
+
+  /**
+   * The destructive case the review found: a re-run whose own extraction partially
+   * fails must not delete the evidence the earlier run wrote for blocks it did not
+   * re-read. The button tells the PM to re-run after a partial failure, so this is
+   * the ordinary path, not an exotic one.
+   */
+  it("a re-run that fails a block keeps the other blocks' rows", async () => {
+    const { dealId, callId } = await seedCall("Partial Rerun Test");
+
+    // First run: both blocks answer.
+    const ftRow = draft({
+      quote: "We ran settlement operations at two clearing banks for six years.",
+      rubricKey: "ft",
+      subDimensionKey: "earned-insight",
+    });
+    await runExtractionForCall(pm, callId, {
+      client: stubClient({ observations: [verbatim, ftRow], claims: [] }),
+    });
+    expect(await db.observation.count({ where: { dealId } })).toBe(2);
+
+    // Second run: the Product/Tech block fails, every other block answers.
+    const ptPrompt = systemPromptFor(RUBRICS.find((r) => r.key === "pt")!);
+    const failing: ExtractionClient = {
+      messages: {
+        parse: async (params) => {
+          if (params.system === ptPrompt) throw Object.assign(new Error("nope"), { status: 429 });
+          const rubric = RUBRICS.find((r) => params.system === systemPromptFor(r));
+          const mine = rubric
+            ? [ftRow].filter((o) => rubric.subs.some((s) => s.key === o.subDimensionKey))
+            : [];
+          return { parsed_output: { observations: mine, claims: [] }, stop_reason: "end_turn" };
+        },
+      },
+    };
+    const summary = await runExtractionForCall(pm, callId, { force: true, client: failing });
+
+    expect(summary.failedBlocks.map((f) => f.rubricKey)).toEqual(["pt"]);
+    const quotes = (await db.observation.findMany({ where: { dealId } })).map((o) => o.quote);
+    // The failed block's row survived because this run never re-read that block.
+    expect(quotes).toContain(verbatim.quote);
+    expect(quotes).toContain(ftRow.quote);
+    expect(quotes).toHaveLength(2);
+  });
+
+  /** A partial run is not a complete read, and the record must not claim it was. */
+  it("leaves the call un-extracted when a block failed", async () => {
+    const { callId } = await seedCall("Partial Flag Test");
+    const failing: ExtractionClient = {
+      messages: {
+        parse: async (params) => {
+          const pt = systemPromptFor(RUBRICS.find((r) => r.key === "pt")!);
+          if (params.system === pt) throw Object.assign(new Error("nope"), { status: 429 });
+          return { parsed_output: { observations: [], claims: [] }, stop_reason: "end_turn" };
+        },
+      },
+    };
+    await runExtractionForCall(pm, callId, { client: failing });
+    expect((await db.call.findUniqueOrThrow({ where: { id: callId } })).extracted).toBe(false);
+  });
+
+  /**
+   * Rows written before the confidence column existed carry a null marker. The
+   * predicate has to see them, or the next re-run duplicates them instead of
+   * replacing them.
+   */
+  it("a forced re-run replaces rows written before confidence existed", async () => {
+    const { dealId, callId } = await seedCall("Legacy Row Test");
+    await db.observation.create({
+      data: {
+        dealId,
+        callNumber: 1,
+        rubricKey: "pt",
+        subDimensionKey: "compounding-moat",
+        quote: verbatim.quote,
+        status: "draft",
+        confidence: null,
+        layer: "L1",
+      },
+    });
+    await db.call.update({ where: { id: callId }, data: { extracted: true } });
+
+    await runExtractionForCall(pm, callId, {
+      force: true,
+      client: stubClient({ observations: [verbatim], claims: [] }),
+    });
+
+    // Replaced, not duplicated.
+    expect(await db.observation.count({ where: { dealId } })).toBe(1);
+  });
+
+  /**
+   * The authorship rule, in its sharpest form: the machine may not undo a human's
+   * rejection by re-drafting the same quote and filing it as evidence.
+   */
+  it("does not re-create a quote the PM has already rejected", async () => {
+    const { dealId, callId } = await seedCall("No Resurrect Test");
+    await runExtractionForCall(pm, callId, {
+      client: stubClient({ observations: [verbatim], claims: [] }),
+    });
+    const o = await db.observation.findFirstOrThrow({ where: { dealId } });
+    await decideObservation(pm, o.id, { status: "rejected" });
+
+    const summary = await runExtractionForCall(pm, callId, {
+      force: true,
+      client: stubClient({ observations: [verbatim], claims: [] }),
+    });
+
+    expect(summary.skippedAlreadyRuledOn).toBe(1);
+    const rows = await db.observation.findMany({ where: { dealId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("rejected");
+  });
+
+  /**
+   * Two blocks may legitimately return the same quote — the prompt says so. The
+   * claim must anchor to its own block's observation, not to whichever row the
+   * database happened to return last.
+   */
+  it("anchors a claim to its own block when two blocks share a quote", async () => {
+    const { dealId, callId } = await seedCall("Anchor Collision Test");
+    const shared = "Our matcher runs continuously instead of as a nightly batch job.";
+
+    const ptRow = draft({ quote: shared, rubricKey: "pt", subDimensionKey: "compounding-moat" });
+    const ftRow = draft({ quote: shared, rubricKey: "ft", subDimensionKey: "earned-insight" });
+
+    await runExtractionForCall(pm, callId, {
+      client: stubClient({
+        observations: [ptRow, ftRow],
+        claims: [
+          {
+            text: "Continuous reconciliation is the moat.",
+            anchorQuote: shared,
+            originTag: "founder-volunteered",
+            rubricKey: "ft",
+          },
+        ],
+      }),
+    });
+
+    const claim = await db.claim.findFirstOrThrow({ where: { dealId } });
+    const anchor = await db.observation.findUniqueOrThrow({ where: { id: claim.anchorObsId } });
+    expect(anchor.rubricKey).toBe("ft");
   });
 
   it("refuses a PARTNER running extraction", async () => {

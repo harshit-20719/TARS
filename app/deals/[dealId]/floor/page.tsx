@@ -63,8 +63,23 @@ export default async function FloorPage({ params }: { params: Promise<{ dealId: 
     else obsBySub.set(o.subDimensionKey, [o]);
   }
 
-  const status: "fail" | "open" | "clear" =
-    trippedKills.length > 0 ? "fail" : unscored.length > 0 ? "open" : "clear";
+  /**
+   * Four states, not three.
+   *
+   * A tripped mandatory condition is neither a kill nor nothing, and with only
+   * three states it fell through to "clear" — so the banner read "Floor: clear.
+   * Every floor row is scored and none reads at its breach value" and then, in the
+   * next sentence, named the outstanding condition. `lib/steps.ts` already makes
+   * this distinction for the sidebar; the page now agrees with it.
+   */
+  const status: "fail" | "open" | "condition" | "clear" =
+    trippedKills.length > 0
+      ? "fail"
+      : unscored.length > 0
+        ? "open"
+        : tripped.length > 0
+          ? "condition"
+          : "clear";
 
   return (
     <div className="page">
@@ -80,7 +95,11 @@ export default async function FloorPage({ params }: { params: Promise<{ dealId: 
 
       <div className={`floor-banner ${status}`} style={{ marginBottom: 18 }}>
         <span className="fb-icon">
-          <Icon name={status === "fail" ? "alert" : status === "open" ? "flag" : "ok"} />
+          <Icon
+            name={
+              status === "fail" ? "alert" : status === "open" || status === "condition" ? "flag" : "ok"
+            }
+          />
         </span>
         <div>
           {status === "fail" ? (
@@ -94,6 +113,11 @@ export default async function FloorPage({ params }: { params: Promise<{ dealId: 
               {unscored.length === 1 ? " has" : "s have"} not been scored yet — an unscored floor row is an
               open question, not a pass.
             </>
+          ) : status === "condition" ? (
+            <>
+              <b>Floor: condition outstanding.</b> Every floor row is scored and no kill value is tripped,
+              but a mandatory condition has not been cleared.
+            </>
           ) : (
             <>
               <b>Floor: clear.</b> Every floor row is scored and none reads at its breach value.
@@ -102,7 +126,7 @@ export default async function FloorPage({ params }: { params: Promise<{ dealId: 
           {tripped.some((r) => r.sub.floor!.weight === "flag") && (
             <>
               {" "}
-              One mandatory condition is outstanding:{" "}
+              Outstanding:{" "}
               {tripped
                 .filter((r) => r.sub.floor!.weight === "flag")
                 .map((r) => r.sub.label)

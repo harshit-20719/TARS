@@ -12,6 +12,7 @@
  */
 
 import * as z from "zod";
+import type { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
 import { subByKey } from "@/framework";
@@ -170,6 +171,8 @@ export interface RunExtractionOptions {
 export interface RunExtractionSummary extends ExtractionResult {
   observationsWritten: number;
   claimsWritten: number;
+  /** Quotes the machine re-drafted that the PM had already ruled on, so were skipped. */
+  skippedAlreadyRuledOn: number;
 }
 
 /**
@@ -229,24 +232,63 @@ export async function runExtractionForCall(
    * everything the machine files and on nothing a human does, including a re-map,
    * which clears it.
    */
-  const machineWritten = {
+  const machineWritten: Prisma.ObservationWhereInput = {
     dealId: call.dealId,
     callNumber: call.number,
-    confidence: { not: null },
     decidedById: null,
-  } as const;
+    /**
+     * Either marker identifies an undecided machine row. `confidence` is set on
+     * everything this version writes, but rows written before that column existed
+     * have it null — and matching only on `confidence` left them behind on a
+     * re-run, so the next extraction duplicated them instead of replacing them.
+     */
+    OR: [{ confidence: { not: null } }, { status: "draft" }],
+  };
+
+  /**
+   * Only the blocks this run actually re-read.
+   *
+   * Scoping the delete is what makes a retry after a partial failure safe. The
+   * delete used to cover the whole call, so re-running when five of six blocks had
+   * succeeded and one had failed would remove the five blocks' evidence and write
+   * back only the sixth — destroying real work while looking like a normal retry,
+   * which is exactly what the button invites the PM to do.
+   */
+  const rewritten: Prisma.ObservationWhereInput = {
+    ...machineWritten,
+    rubricKey: { in: result.succeededBlocks },
+  };
 
   const written = await db.$transaction(
     async (tx) => {
       /**
-       * Clear the machine's own previous drafts for this call, and nothing else.
-       * A row the PM has ruled on carries `decidedById`, so it survives a re-run —
-       * silently discarding a review pass is the one thing a re-extract must not do.
+       * Clear this run's own previous rows, and nothing else. A row the PM has
+       * ruled on carries `decidedById`, so it survives — silently discarding a
+       * review pass is the one thing a re-extract must not do.
        */
-      await tx.observation.deleteMany({ where: machineWritten });
+      await tx.observation.deleteMany({ where: rewritten });
+
+      /**
+       * Quotes a human has already ruled on, so the machine cannot undo them.
+       *
+       * A rejected observation survives the delete above (it carries `decidedById`),
+       * and without this the re-run wrote the same quote again — filed `accepted`
+       * when confidence was high, and auto-cited as evidence. The PM's rejection
+       * was reversed by a machine, which is the one thing the authorship rule
+       * exists to prevent.
+       */
+      const decided = await tx.observation.findMany({
+        where: { dealId: call.dealId, callNumber: call.number, decidedById: { not: null } },
+        select: { quote: true },
+      });
+      const alreadyRuledOn = new Set(decided.map((o) => normaliseForComparison(o.quote)));
+
+      const fresh = result.observations.filter(
+        (o) => !alreadyRuledOn.has(normaliseForComparison(o.quote)),
+      );
 
       await tx.observation.createMany({
-        data: result.observations.map((o) => ({
+        data: fresh.map((o) => ({
           dealId: call.dealId,
           callNumber: call.number,
           rubricKey: o.rubricKey,
@@ -276,14 +318,29 @@ export async function runExtractionForCall(
 
       // createMany does not return ids, and claims need one to anchor to.
       const persisted = await tx.observation.findMany({
-        where: machineWritten,
-        select: { id: true, quote: true },
+        where: rewritten,
+        select: { id: true, quote: true, rubricKey: true },
       });
-      const quoteToId = new Map(persisted.map((o) => [normaliseForComparison(o.quote), o.id]));
+      /**
+       * Keyed on block *and* quote, not quote alone.
+       *
+       * The prompt deliberately tells the model that one passage may be evidence
+       * for several rows, and six blocks each read the whole transcript — so the
+       * same quote text arriving from two blocks is routine, not rare. A map keyed
+       * on quote alone kept whichever row the database returned last, so a claim
+       * could end up anchored to a different block's observation and the ledger
+       * would print the wrong "filed under" row.
+       */
+      const anchorKey = (rubricKey: string, quote: string) =>
+        `${rubricKey}::${normaliseForComparison(quote)}`;
+      const quoteToId = new Map(
+        persisted.map((o) => [anchorKey(o.rubricKey, o.quote), o.id]),
+      );
 
       const claimRows = result.claims.flatMap((c) => {
-        const anchorObsId = quoteToId.get(normaliseForComparison(c.anchorQuote));
-        // verifyDrafts should already have dropped these.
+        const anchorObsId = quoteToId.get(anchorKey(c.rubricKey, c.anchorQuote));
+        // verifyDrafts should already have dropped these; a claim whose quote was
+        // ruled on by a human and therefore not re-created also lands here.
         if (!anchorObsId) return [];
         return [
           {
@@ -303,9 +360,25 @@ export async function runExtractionForCall(
       });
       if (claimRows.length) await tx.claim.createMany({ data: claimRows });
 
-      await tx.call.update({ where: { id: callId }, data: { extracted: true } });
+      /**
+       * A call is only "extracted" when every block was read.
+       *
+       * Marking it extracted after a partial run made the missing blocks
+       * indistinguishable from blocks that genuinely had nothing in them: the
+       * failure list lived only in the button's local state, so one refresh and the
+       * transcript page showed a plain green chip over an incomplete read.
+       */
+      await tx.call.update({
+        where: { id: callId },
+        data: { extracted: result.failedBlocks.length === 0 },
+      });
 
-      return { observationsWritten: persisted.length, claimsWritten: claimRows.length };
+      return {
+        observationsWritten: persisted.length,
+        claimsWritten: claimRows.length,
+        /** Re-created quotes the PM had already ruled on, and so were skipped. */
+        skippedAlreadyRuledOn: result.observations.length - fresh.length,
+      };
     },
     { timeout: 20_000, maxWait: 10_000 },
   );
@@ -336,26 +409,61 @@ export async function decideObservation(actor: Actor, observationId: string, raw
     throw new RuleViolation(`no such sub-dimension: ${input.subDimensionKey}`, "subDimensionKey");
   }
 
-  await db.observation.update({
-    where: { id: observationId },
-    data: {
-      status: input.status as ObservationStatus,
-      ...(input.quote !== undefined ? { quote: input.quote } : {}),
-      ...(input.subDimensionKey !== undefined ? { subDimensionKey: input.subDimensionKey } : {}),
-      ...(input.rubricKey !== undefined ? { rubricKey: input.rubricKey } : {}),
+  /**
+   * The decision and its consequences for the citation set, in one transaction.
+   *
+   * Evidence is resolved when a score is saved and then frozen into ScoreEvidence,
+   * so a decision taken afterwards has to maintain it. Without this, rejecting a
+   * quote left every score that already cited it still citing it: the capture page
+   * hid the quote while the scorecard kept printing it, and the row still counted
+   * as complete. That contradicted what the reject button promises, and it let a
+   * score rest on evidence its author had thrown out.
+   */
+  await db.$transaction(async (tx) => {
+    if (input.status === "rejected") {
+      // Not evidence anywhere, not just on the row it was read from.
+      await tx.scoreEvidence.deleteMany({ where: { observationId } });
+    } else if (input.subDimensionKey !== undefined) {
       /**
-       * A re-map retires the machine's mapping metadata.
-       *
-       * Once a human has chosen the row, the model's confidence and its "why this
-       * row" note describe a filing that no longer exists — leaving them attached
-       * would show the PM a rationale for the wrong row. Clearing them also takes
-       * the row out of the re-extract's blast radius, which is the behaviour a PM
-       * expects: a correction should survive re-running the machine.
+       * A move takes the quote off the row it left. It is not added to the
+       * destination row's score here: that score may not exist yet, and when it is
+       * next saved `setScore` cites the row's observations from scratch, which now
+       * includes this one.
        */
-      ...(input.subDimensionKey !== undefined ? { confidence: null, mappingNote: null } : {}),
-      decidedById: actor.id,
-      decidedAt: new Date(),
-    },
+      const current = await tx.observation.findUnique({
+        where: { id: observationId },
+        select: { subDimensionKey: true },
+      });
+      if (current && current.subDimensionKey !== input.subDimensionKey) {
+        await tx.scoreEvidence.deleteMany({ where: { observationId } });
+      }
+    }
+
+    await tx.observation.update({
+      where: { id: observationId },
+      data: {
+        status: input.status as ObservationStatus,
+        ...(input.quote !== undefined ? { quote: input.quote } : {}),
+        ...(input.subDimensionKey !== undefined
+          ? { subDimensionKey: input.subDimensionKey }
+          : {}),
+        ...(input.rubricKey !== undefined ? { rubricKey: input.rubricKey } : {}),
+        /**
+         * A re-map retires the machine's mapping metadata.
+         *
+         * Once a human has chosen the row, the model's confidence and its "why this
+         * row" note describe a filing that no longer exists — leaving them attached
+         * would show the PM a rationale for the wrong row. Clearing them also takes
+         * the row out of the re-extract's blast radius, which is the behaviour a PM
+         * expects: a correction should survive re-running the machine.
+         */
+        ...(input.subDimensionKey !== undefined
+          ? { confidence: null, mappingNote: null }
+          : {}),
+        decidedById: actor.id,
+        decidedAt: new Date(),
+      },
+    });
   });
 }
 

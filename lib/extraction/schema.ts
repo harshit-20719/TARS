@@ -102,7 +102,15 @@ export interface DraftObservation {
   mappingNote: string;
 }
 
-export type DraftClaim = z.infer<typeof DraftClaimSchema>;
+/**
+ * A drafted claim as the service handles it, with its block resolved.
+ *
+ * `rubricKey` is not asked of the model — it is implied by which block's call
+ * returned the claim. It matters because a claim is matched back to its anchor
+ * observation by quote text, and the same quote legitimately arrives from more than
+ * one block; without the block, that match is ambiguous.
+ */
+export type DraftClaim = z.infer<typeof DraftClaimSchema> & { rubricKey: string };
 
 export interface ExtractionOutput {
   observations: DraftObservation[];

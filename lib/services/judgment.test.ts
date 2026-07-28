@@ -51,6 +51,30 @@ describe("slides", () => {
     expect(row.layer).toBe("L1");
   });
 
+  /**
+   * The guard is prefilled from the lowest rooted row now, so the record has to
+   * keep whether a human actually signed off on that line. Unconfirmed it is a
+   * mechanical note; confirmed it is the PM's stated reason, and the anti-vibe rule
+   * only means something if the difference survives.
+   */
+  it("records whether the ceiling guard was confirmed by a human", async () => {
+    const dealId = await newDeal("Guard Confirm Test");
+
+    await setSlide(pm, { dealId, slideKey: "earned-secret", value: 5, ceilingGuard: guard });
+    let row = await db.slide.findFirstOrThrow({ where: { dealId, slideKey: "earned-secret" } });
+    expect(row.guardConfirmed).toBe(false);
+
+    await setSlide(pm, {
+      dealId,
+      slideKey: "earned-secret",
+      value: 5,
+      ceilingGuard: guard,
+      guardConfirmed: true,
+    });
+    row = await db.slide.findFirstOrThrow({ where: { dealId, slideKey: "earned-secret" } });
+    expect(row.guardConfirmed).toBe(true);
+  });
+
   it("takes the lens from the framework, not from the caller", async () => {
     const dealId = await newDeal("Lens Test");
     // gtm-engine reads weakest-link. Even if a caller claimed otherwise, the

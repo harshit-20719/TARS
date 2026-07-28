@@ -64,6 +64,8 @@ export function ScoreControl({
   const [editingNote, setEditingNote] = useState(false);
 
   const error = setScore.error ?? clearScore.error;
+  /** A save is in flight on this row. Overlapping saves can resolve out of order. */
+  const busy = setScore.pending || clearScore.pending;
 
   const options: { value: ScoreValue; label: string; cls?: string }[] =
     sub.type === "binary"
@@ -77,11 +79,37 @@ export function ScoreControl({
           label: String(v),
         }));
 
+  /**
+   * The condition as the server will accept it.
+   *
+   * A ticked box with nothing written in it is not a condition the service will
+   * store, so pressing a score must not try to send one. Without this, any row
+   * flagged before the note existed — or flagged a moment ago and not yet written
+   * up — refuses every subsequent score press with "say what the condition is",
+   * an error about the checkbox raised against a click on the number.
+   */
+  const effectiveFlag = flag && flagNote.trim().length > 0;
+
   async function pick(value: ScoreValue) {
+    // Ignore presses while a save is in flight. Two overlapping saves on one row
+    // can land out of order, and the later response wins — so the PM's last press
+    // is the one that gets lost. The optimistic value already gives the
+    // immediate feedback that made disabling the button feel wrong.
+    if (busy) return;
+
     // The optimistic update is handed to runWith so it lands inside the transition.
     // Outside it, React cannot tie the value to anything that completes, and a
     // refused save would leave the wrong number on screen looking saved.
     if (value === shown) {
+      /**
+       * Clearing the score clears its condition too, because that is what the
+       * server does — clearScore deletes the whole row, flagNote included. Leaving
+       * the pair in local state made the condition reappear on the next press,
+       * silently re-attached to a score the PM had just cleared.
+       */
+      setFlag(false);
+      setFlagNote("");
+      setEditingNote(false);
       await clearScore.runWith(() => showValue(undefined), dealId, sub.key);
       return;
     }
@@ -91,21 +119,26 @@ export function ScoreControl({
       dealId,
       subDimensionKey: sub.key,
       value,
-      flag,
-      ...(flag ? { flagNote } : {}),
+      flag: effectiveFlag,
+      ...(effectiveFlag ? { flagNote } : {}),
     });
   }
 
   /** Save the condition alongside the existing value. A no-op before a score exists. */
   async function saveCondition(nextFlag: boolean, nextNote: string) {
-    setFlag(nextFlag);
     setFlagNote(nextNote);
-    if (shown === undefined) return;
     if (nextFlag && !nextNote.trim()) {
-      // Wait for the line rather than sending a save the server will refuse.
+      /**
+       * Wait for the line rather than sending a save the server will refuse — and
+       * crucially, do not record the flag as set yet. Setting it here left the row
+       * holding a flag with no note, which then rode along on every later score
+       * press and got each one refused.
+       */
       setEditingNote(true);
       return;
     }
+    setFlag(nextFlag);
+    if (shown === undefined) return;
     setEditingNote(false);
     await setScore.run({
       dealId,
@@ -128,6 +161,9 @@ export function ScoreControl({
               type="button"
               className={o.cls}
               aria-pressed={o.value === shown}
+              // Not `disabled` — the optimistic value has already moved, so greying
+              // the strip out would flicker on every press. `pick` ignores the click.
+              aria-busy={busy || undefined}
               title={o.value === shown ? "Press again to clear" : undefined}
               onClick={() => pick(o.value)}
             >
@@ -135,6 +171,7 @@ export function ScoreControl({
             </button>
           ))}
         </div>
+        {busy && <span className="ctl-saving">saving…</span>}
         {tripped && (
           <span className={`chip xs ${sub.floor!.weight === "kill" ? "bad" : "warn"}`}>
             <span className="dot" />

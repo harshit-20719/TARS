@@ -205,7 +205,16 @@ export async function getDeal(id: string): Promise<Deal | undefined> {
  * bytes never cross the wire.
  */
 export async function getRecord(id: string): Promise<DealRecord | undefined> {
-  const row = await db.deal.findUnique({
+  /**
+   * Transcript sizes, computed database-side and fetched alongside the record.
+   *
+   * Two queries rather than one, because the nested include cannot express a
+   * computed column — but issued together, not in sequence. The size query needs
+   * only the deal id, which is known on entry, so waiting for the record first
+   * added a serial round trip to a read that every page and every save performs.
+   */
+  const [row, sizes] = await Promise.all([
+    db.deal.findUnique({
     where: { id },
     include: {
       owner: { select: { name: true } },
@@ -219,21 +228,15 @@ export async function getRecord(id: string): Promise<DealRecord | undefined> {
       slides: { orderBy: [{ createdAt: "asc" }, { slideKey: "asc" }] },
       founderTypeRead: true,
     },
-  });
+    }),
+    db.$queryRaw<{ id: string; chars: bigint }[]>`
+      SELECT id, char_length(transcript) AS chars
+      FROM "Call"
+      WHERE "dealId" = ${id}
+    `,
+  ]);
   if (!row) return undefined;
 
-  /**
-   * Transcript sizes, computed database-side. A second round trip rather than a
-   * bigger one: the nested include above cannot express a computed column, and
-   * two small queries beat one that carries the text.
-   */
-  const sizes = row.calls.length
-    ? await db.$queryRaw<{ id: string; chars: bigint }[]>`
-        SELECT id, char_length(transcript) AS chars
-        FROM "Call"
-        WHERE "dealId" = ${id}
-      `
-    : [];
   const charsById = new Map(sizes.map((s) => [s.id, Number(s.chars)]));
 
   return {

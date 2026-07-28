@@ -132,6 +132,34 @@ describe("ScoreControl payloads", () => {
    * condition is not something anyone can act on at IC. Refusing the save is the
    * only way to keep that from happening quietly.
    */
+  /**
+   * The P0 the review found, as a test. A score flagged before the note column
+   * existed has flag true and no note; the capture control sends the flag on every
+   * press, so that row became impossible to re-score. The backfill clears the flag
+   * and the control now only sends a condition it can actually save — this asserts
+   * the shape the client builds is one the service accepts.
+   */
+  it("a flagged row with no note can still be re-scored", async () => {
+    const dealId = await newDeal("Legacy Flag Test");
+    await setScore(pm, { dealId, subDimensionKey: "why-now", value: 3 });
+    // The pre-migration shape, written directly.
+    await db.subDimensionScore.updateMany({
+      where: { dealId, subDimensionKey: "why-now" },
+      data: { flag: true, flagNote: null },
+    });
+
+    // What ScoreControl.pick() now sends: the flag is dropped because no condition
+    // was ever written, so the press is an ordinary score change.
+    await setScore(pm, { dealId, subDimensionKey: "why-now", value: 4, flag: false });
+
+    const rec = await getRecord(dealId);
+    const score = rec!.scores.find((s) => s.subDimensionKey === "why-now");
+    expect(score).toMatchObject({ value: 4 });
+    // Absent rather than false — the record contract carries the flag optionally.
+    expect(score).not.toHaveProperty("flag");
+    expect(score).not.toHaveProperty("flagNote");
+  });
+
   it("refuses a condition with nothing written in it", async () => {
     const dealId = await newDeal("Score Condition Empty");
     await expect(
