@@ -88,22 +88,22 @@ attention; Haiku is defensible if cost matters more than the last few percent.
 
 ---
 
-## Stage 1 — Get the code onto `main`
+## Stage 1 — Confirm the code is on `main`
 
 Vercel deploys whatever is on your repository's main branch. The backend is
-currently on a branch called `claude/capture-scorecard-skeleton-1299ab`, so it
-has to be merged first.
+already there, so there is nothing to merge — this stage is a check, not a step.
 
-Ask Claude to do it, or run:
+**How to know it worked:** open your repo on GitHub with `main` selected, and
+confirm you can see a `prisma` folder in the file list.
+
+If you are working on a feature branch and want its changes deployed, merge it
+to `main` first — Vercel will not deploy from the branch:
 
 ```bash
 git checkout main
-git merge claude/capture-scorecard-skeleton-1299ab
+git merge <your-branch>
 git push origin main
 ```
-
-**How to know it worked:** open your repo on GitHub, and confirm you can see a
-`prisma` folder in the file list.
 
 ---
 
