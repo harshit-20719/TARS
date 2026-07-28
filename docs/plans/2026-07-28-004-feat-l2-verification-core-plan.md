@@ -15,7 +15,7 @@ execution: code
 
 - **Objective:** Open the record for a second pass. Claims get sharpened with the founder and proven, the escalated rubrics get re-scored with the cap lifted, partners write structural reads around each call, and the record shows what changed between L1 and L2.
 - **Product authority:** This plan owns the record-shaped half of L2 — claims, layers, scoring, structural reads, drift. The deal room (materials, uploads, document exchange with founders) is not active scope and is planned separately.
-- **Open blockers:** Whether a tech operator ever authors in TARS directly, or only through the PM or partner who writes their contribution up.
+- **Open blockers:** None.
 
 ---
 
@@ -45,12 +45,13 @@ What the record does have is the seam. Layer-keyed uniqueness on scores and slid
 - **Structural reads are barred to the machine.** Extraction is already asserted by test to write zero score rows; the same guard shape applies here. Governs R14.
 - **Drift is machine-flagged and human-ruled, with a materiality threshold.** This mirrors `MappingConfidence`, where the machine rates its own output and only the uncertain cases interrupt a person. Governs R18, R19, R20.
 - **Advancing a deal to L2 is a deliberate act.** `DealHeaderForm` already withholds `layer` from ordinary editing because a stray restamp would silently detach every score from the layer it was authored at. Governs R6.
+- **A tech operator never signs into TARS.** Their contribution reaches the record through the PM or partner who writes it up, which keeps sign-in restricted to `biome.in` and adds no external-account surface to an application holding founder call transcripts. The record attributes the read to its author, not to the expert consulted.
 
 ### Actors
 
 - A1. **PM** — escalates the deal, runs the L2 call, refines claims, re-scores, writes the pre-call structural read.
 - A2. **Partner** — joins the escalated call, writes the post-call structural read, and authors the record on the same terms as a PM.
-- A3. **Tech operator** — a technical expert brought onto an escalated call to test a claim. Whether they hold a TARS account is unresolved (see Outstanding Questions).
+- A3. **Tech operator** — a technical expert brought onto an escalated call to test a claim. Holds no TARS account and never writes to the record directly.
 - A4. **Machine** — drafts observations and claims from transcripts and flags candidate drift. Never rules, never scores, never writes a structural read.
 
 ### Requirements
@@ -191,20 +192,18 @@ stateDiagram-v2
 
 ### Dependencies and Assumptions
 
-- Depends on the partner-authoring change in `docs/plans/2026-07-28-003-feat-l1-team-readiness-plan.md` (R5 there). Structural reads at L2 assume a partner can write to the record at all.
-- Google SSO is domain-restricted to `biome.in` (backend plan B7), so an external tech operator cannot hold an account as things stand. Their contribution reaches the record through the PM or partner who writes it up.
+- Depends on the partner-authoring change in `docs/plans/2026-07-28-003-feat-l1-completion-plan.md` (R5 there). Structural reads at L2 assume a partner can write to the record at all.
+- Google SSO stays domain-restricted to `biome.in` (backend plan B7). Nothing in this plan requires an external account.
 - The L2 cap of 10 is a partner-level call on the same footing as spec D4's cap of 6 at L1, and is taken.
 - `Claim` and `Call` gaining a layer stamp is assumed available to this work; both are absent today.
 
 ### Outstanding Questions
 
-**Resolve before planning**
-
-- Whether a tech operator ever authors in TARS directly. If they do, the domain-restricted sign-in has to change and external accounts become a real surface; if they do not, A3 never touches the app and nothing changes.
-- What counts as a material deviation for R19, and who tunes it. Too sensitive and every call floods the reviewer; too blunt and the tracker misses the drift it exists to catch.
+Nothing blocks planning.
 
 **Deferred to planning**
 
+- Where the materiality line sits for R19, and how it gets tuned. Too sensitive and every call floods the reviewer; too blunt and the tracker misses the drift it exists to catch. R19 fixes the intent; the threshold is proposed during planning and tuned against real transcripts.
 - Whether a refined claim is a new row superseding the old one or the same row carrying its history. R1 fixes the outcome — the original stays readable — not the shape.
 - How the comparison presents a sub-dimension that was scored at L1 and never revisited, beyond the requirement in R12 that it says so.
 - Whether the pre-call and post-call structural reads are one entity with two moments or two entities.
@@ -214,7 +213,7 @@ stateDiagram-v2
 
 This plan owns the record-shaped half of L2. The breakdown below is how the surrounding work is currently understood, not a committed roadmap — a later plan may revise, split, or discard any of it.
 
-- **L1 team readiness** (`docs/plans/2026-07-28-003-feat-l1-team-readiness-plan.md`)
+- **L1 completion** (`docs/plans/2026-07-28-003-feat-l1-completion-plan.md`)
   - Enables this plan: partners must be able to author before they can write a structural read.
   - Shares nothing else; its transcript and ownership work is independent of the layer model.
 - **L2 deal room** — materials, uploads, tagging to a claim or rubric, and document exchange with founders.

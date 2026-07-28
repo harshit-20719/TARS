@@ -1,21 +1,21 @@
 ---
-title: L1 Team Readiness - Plan
+title: L1 Completion - Plan
 type: feat
 date: 2026-07-28
-topic: l1-team-readiness
+topic: l1-completion
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: requirements-only
 product_contract_source: ce-brainstorm
 execution: code
 ---
 
-# L1 Team Readiness - Plan
+# L1 Completion - Plan
 
 ## Goal Capsule
 
-- **Objective:** Make the L1 tool usable by a team rather than one operator — the app says who you are, deals have visible owners you can hand over, and transcripts arrive from Fireflies instead of the clipboard.
-- **Product authority:** This plan owns identity, roles, deal ownership, and transcript ingestion at L1. The L2 layer — claim verification, structural reads, layer comparison — is not active scope here and is planned separately in `docs/plans/2026-07-28-004-feat-l2-verification-core-plan.md`.
-- **Open blockers:** How a TARS user authenticates to Fireflies is unresolved and shapes what the import screen can offer.
+- **Objective:** Close the gap between an L1 tool that works and one a team can run — the app says who you are, deals have visible owners you can hand over, transcripts arrive from Fireflies instead of the clipboard, and a PM can see which rubrics the calls so far have not drilled on.
+- **Product authority:** This plan owns identity, roles, deal ownership, transcript ingestion, and capture coverage at L1. The L2 layer — claim verification, structural reads, layer comparison — is not active scope here and is planned separately in `docs/plans/2026-07-28-004-feat-l2-verification-core-plan.md`.
+- **Open blockers:** None.
 
 ---
 
@@ -23,7 +23,7 @@ execution: code
 
 ### Summary
 
-Surface the identity the app already tracks, give deals owners that can be seen and transferred, and let a PM pull a transcript from Fireflies instead of pasting one. Partners become full authors of the record rather than read-only observers.
+Surface the identity the app already tracks, give deals owners that can be seen and transferred, let a PM pull a transcript from Fireflies instead of pasting one, and show which parts of the rubrics the calls so far have not drilled on. Partners become full authors of the record rather than read-only observers.
 
 ### Problem Frame
 
@@ -35,6 +35,8 @@ The role split is stricter than the team needs. `AUTHOR_ROLES` admits `PM` and `
 
 Separately, every transcript still arrives by copy-paste. The team records founder calls in Fireflies, and moving that text by hand is both the slowest step in the flow and the one that discards the speaker labels the extraction path is already built to carry.
 
+A last gap opens once a deal runs past its first call, which L1 explicitly allows. Every observation records the sub-dimension it was mapped to and the call it came from, so the record already knows what each call covered — but nothing reads it back. `progressOf` in `lib/steps.ts` counts sub-dimensions scored and sub-dimensions holding evidence; neither number tells a PM preparing for the second call which of the 41 rows nobody has asked about yet. That question is answered today by scrolling the capture grid and remembering.
+
 ### Key Decisions
 
 - **Partners author the record on the same terms as PMs.** Attribution survives the change: `authorId` is already on every score, slide, and founder read, so the record keeps saying who did the work even when both roles may. Governs R5.
@@ -45,6 +47,9 @@ Separately, every transcript still arrives by copy-paste. The team records found
 - **Founders stay a single free-text field.** Nothing in the L2 design turned out to need founders modelled as separate people, so the structure would carry cost without a consumer.
 - **Fireflies import is always chosen, never automatic.** Opening a call on a record is a judgment; a title match is not. Governs R15.
 - **Imported transcripts keep their speaker labels.** Spec §3 deferred diarization because paste made it expensive; Fireflies makes it free, and `Observation.speaker` already carries it end to end. Governs R13.
+- **Coverage separates never-asked from asked-and-thin.** A row nobody probed and a row that yielded only rejected quotes both need work on the next call, but they are different conversations to have. Governs R17.
+- **Coverage is shown, never enforced.** Spec §3 defers coverage percentages and readiness thresholds; this plan builds the reading and leaves the gate deferred, which keeps it consistent with the framework's rule that the app renders facts and returns no verdict. Governs R20.
+- **TARS connects to Fireflies once, for the whole workspace, not per user.** Nothing is stranded because a call was recorded by a colleague. The accepted consequence is that every TARS user can browse every meeting the workspace has recorded, including ones unrelated to any deal; sign-in is already restricted to `biome.in`, so the exposure is bounded to the team. Governs R11, R16.
 
 ### Actors
 
@@ -73,15 +78,23 @@ Separately, every transcript still arrives by copy-paste. The team records found
 
 **Transcript ingestion**
 
-- R11. A PM can import a call transcript from Fireflies by searching or browsing their recent meetings and choosing one.
+- R11. A PM can import a call transcript from Fireflies by searching or browsing the workspace's recent meetings and choosing one.
 - R12. Pasting a transcript stays available and behaves as it does today.
 - R13. Speaker labels on an imported transcript reach the observations drafted from it.
 - R14. An imported call carries a call number and a label, supplied the same way a pasted call supplies them.
 - R15. No meeting is ever attached to a deal without a person choosing it.
+- R16. The import screen states that the meetings listed are the workspace's rather than the signed-in user's own.
+
+**Capture coverage**
+
+- R17. The record can be read as a coverage view across all six rubrics, showing each sub-dimension in one of three states: it holds usable evidence, it holds only evidence that was rejected, or no call has touched it.
+- R18. Coverage reads per call as well as cumulatively, so a PM can see what a given call added and what remains untouched across every call so far.
+- R19. Coverage is derived from the record and is never authored.
+- R20. Coverage reports and never gates. It does not block scoring, judgment, or advancing a deal.
 
 **Record identity**
 
-- R16. A deal's identifier is fixed at creation and does not change when the company is renamed.
+- R21. A deal's identifier is fixed at creation and does not change when the company is renamed.
 
 ### Key Flows
 
@@ -105,6 +118,13 @@ Separately, every transcript still arrives by copy-paste. The team records found
   - **Steps:** An ADMIN opens the people page, finds the person, and sets their role.
   - **Outcome:** The change applies the next time that person signs in.
   - **Covers R2, R3, R6.**
+
+- F4. Plan what to ask on the next call
+  - **Trigger:** A PM has run one or more L1 calls on a deal and is preparing the next one.
+  - **Actors:** A1
+  - **Steps:** The PM opens coverage. Rows holding usable evidence, rows that yielded only rejected quotes, and rows no call has touched are distinguishable at a glance, per rubric and per call. The PM picks what to probe.
+  - **Outcome:** The next call targets the gaps instead of repeating ground already covered.
+  - **Covers R17, R18.**
 
 ### Acceptance Examples
 
@@ -138,6 +158,12 @@ Separately, every transcript still arrives by copy-paste. The team records found
   - **When:** The PM imports a Fireflies meeting and leaves the call number at 2.
   - **Then:** The import is rejected with the same collision message a pasted call produces, and the transcript is not saved.
 
+- AE6. A row asked about that yielded nothing
+  - **Covers R17.**
+  - **Given:** Call 1 produced two observations mapped to a GTM sub-dimension, both rejected by the PM, while a second GTM sub-dimension drew no observations at all.
+  - **When:** The PM opens coverage before call 2.
+  - **Then:** The first row reads as drilled on without usable result and the second reads as never touched — the two are distinguishable, not both shown as empty.
+
 ### Scope Boundaries
 
 - Partner-specific views and read-only modes — a partner sees the PM application.
@@ -146,19 +172,18 @@ Separately, every transcript still arrives by copy-paste. The team records found
 - File upload and material exchange with founders — that belongs to the L2 deal-room work, not here.
 - Linking a transcript's speaker to a founder record — speaker stays a free-text label.
 - Changing a deal's identifier when its company is renamed, and any redirect machinery that would require.
+- Coverage thresholds, readiness percentages, and anything that blocks on them (R20) — spec §3 keeps the gate deferred; this plan builds only the reading.
 
 ### Dependencies and Assumptions
 
-- Fireflies exposes a programmatic way to list a user's meetings and fetch a transcript. **Unverified** — the requirements hold whether that turns out to be an MCP server or their API directly, but which one it is shapes the work.
-- Every user who imports has a Fireflies account whose meetings they are entitled to list.
-- Google SSO is domain-restricted to `biome.in` (backend plan B7), so everyone with an account is internal.
+- Fireflies exposes a programmatic way to list a workspace's meetings and fetch a transcript. **Unverified** — the requirements hold whether that turns out to be an MCP server or their API directly, but which one it is shapes the work.
+- A single Fireflies credential can be held by the deployment and used on behalf of any signed-in user.
+- Google SSO is domain-restricted to `biome.in` (backend plan B7), so everyone with an account is internal. This is what bounds the exposure R17 discloses.
 - User rows are created on first sign-in, so "people who hold accounts" means "people who have signed in at least once".
 
 ### Outstanding Questions
 
-**Resolve before planning**
-
-- How a TARS user authenticates to Fireflies: a per-user credential, or one workspace credential shared across the team. A shared credential would show every user the whole team's meetings, which changes what R11's list can safely display.
+Nothing blocks planning.
 
 **Deferred to planning**
 
@@ -168,7 +193,7 @@ Separately, every transcript still arrives by copy-paste. The team records found
 <!-- ce-section: work-relationships -->
 ### How This Work Fits Together
 
-This plan owns L1 team readiness. The breakdown below is how the surrounding work is currently understood, not a committed roadmap — a later plan may revise, split, or discard any of it.
+This plan owns what L1 still needs before a team can run it. The breakdown below is how the surrounding work is currently understood, not a committed roadmap — a later plan may revise, split, or discard any of it.
 
 - **L2 verification core** (`docs/plans/2026-07-28-004-feat-l2-verification-core-plan.md`)
   - Depends on the partner-authoring change here (R5); structural reads at L2 assume partners can write to the record.
@@ -187,4 +212,7 @@ This plan owns L1 team readiness. The breakdown below is how the surrounding wor
 - `lib/repo/records.ts` — `listDeals`, and `toDeal`'s preference for the owner relation over the stored display name.
 - `lib/services/capture.ts` — `uniqueDealId`, `createDeal`, `updateDeal`, `AddCallInput`.
 - `lib/extraction/prompt.ts` and `lib/extraction/schema.ts` — the speaker path that import would feed.
+- `lib/steps.ts` — `progressOf`, which counts scored and evidenced rows but answers no coverage question.
+- `framework/index.ts` — `ALL_SUBS` and `TOTAL_SUBS`, the denominator a coverage reading needs.
+- `components/CaptureGrid.tsx` — where scored, unscored, and incomplete are already distinguished visually.
 - `components/TopBar.tsx` — the surface with no identity on it.
