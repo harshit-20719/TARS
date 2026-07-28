@@ -105,15 +105,41 @@ describe("ScoreControl payloads", () => {
     expect(score).toMatchObject({ value: 4, scoreType: "scale", evidenceObsIds: [obs.id] });
   });
 
-  it("re-saves the same value when only the evidence changed", async () => {
-    // What the control does when a checkbox is toggled on an already-scored row.
+  it("re-saves the same value when a condition is attached", async () => {
+    // What the control does when the condition box is ticked on an already-scored row.
     const dealId = await newDeal("Score Amend");
     await setScore(pm, { dealId, subDimensionKey: "why-now", value: 3, evidenceObsIds: [] });
-    await setScore(pm, { dealId, subDimensionKey: "why-now", value: 3, evidenceObsIds: [], flag: true });
+    await setScore(pm, {
+      dealId,
+      subDimensionKey: "why-now",
+      value: 3,
+      evidenceObsIds: [],
+      flag: true,
+      flagNote: "Regulatory timing rests on a draft circular, not a notified rule.",
+    });
     const rec = await getRecord(dealId);
     const score = rec!.scores.find((s) => s.subDimensionKey === "why-now");
-    expect(score).toMatchObject({ value: 3, flag: true });
+    expect(score).toMatchObject({
+      value: 3,
+      flag: true,
+      flagNote: "Regulatory timing rests on a draft circular, not a notified rule.",
+    });
     expect(rec!.scores.filter((s) => s.subDimensionKey === "why-now")).toHaveLength(1);
+  });
+
+  /**
+   * The flag was a bare boolean, and "advance with condition" with no readable
+   * condition is not something anyone can act on at IC. Refusing the save is the
+   * only way to keep that from happening quietly.
+   */
+  it("refuses a condition with nothing written in it", async () => {
+    const dealId = await newDeal("Score Condition Empty");
+    await expect(
+      setScore(pm, { dealId, subDimensionKey: "why-now", value: 3, flag: true }),
+    ).rejects.toThrow(/say what the condition is/);
+    await expect(
+      setScore(pm, { dealId, subDimensionKey: "why-now", value: 3, flag: true, flagNote: "   " }),
+    ).rejects.toThrow(/say what the condition is/);
   });
 
   it("clears on a second press of the value already set", async () => {

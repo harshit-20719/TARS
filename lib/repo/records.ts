@@ -15,6 +15,7 @@ import { db } from "@/lib/db";
 import { decodeScoreValue, formatRecordDate, toLens, toOriginTag } from "@/lib/domain/codec";
 import type {
   Call,
+  CallMeta,
   Claim,
   Deal,
   DealRecord,
@@ -53,6 +54,38 @@ function toCall(row: Prisma.CallGetPayload<{}>): Call {
   };
 }
 
+/**
+ * The columns a `CallMeta` needs — everything except the transcript itself.
+ *
+ * Named and reused rather than inlined so there is one place that decides what
+ * "call metadata" means, and so adding a column cannot accidentally start
+ * dragging the transcript back into the hot path.
+ */
+const CALL_META_SELECT = {
+  id: true,
+  dealId: true,
+  number: true,
+  label: true,
+  date: true,
+  extracted: true,
+} as const;
+
+type CallMetaRow = Prisma.CallGetPayload<{ select: typeof CALL_META_SELECT }> & {
+  transcriptChars: number;
+};
+
+function toCallMeta(row: CallMetaRow): CallMeta {
+  return {
+    id: row.id,
+    dealId: row.dealId,
+    number: row.number,
+    label: row.label,
+    date: formatRecordDate(row.date),
+    extracted: row.extracted,
+    transcriptChars: row.transcriptChars,
+  };
+}
+
 function toObservation(row: Prisma.ObservationGetPayload<{}>): Observation {
   return {
     id: row.id,
@@ -64,6 +97,8 @@ function toObservation(row: Prisma.ObservationGetPayload<{}>): Observation {
     ...(row.speaker ? { speaker: row.speaker } : {}),
     ...(row.timestamp ? { timestamp: row.timestamp } : {}),
     status: row.status,
+    ...(row.confidence ? { confidence: row.confidence } : {}),
+    ...(row.mappingNote ? { mappingNote: row.mappingNote } : {}),
     layer: row.layer,
   };
 }
@@ -93,6 +128,7 @@ function toScore(row: ScoreRow): SubDimensionScore {
     // Absent rather than false, so the shape matches the record contract's
     // optional flag and deep comparisons against the fixtures hold.
     ...(row.flag ? { flag: true } : {}),
+    ...(row.flagNote ? { flagNote: row.flagNote } : {}),
     layer: row.layer,
   };
 }
@@ -105,6 +141,7 @@ function toSlide(row: Prisma.SlideGetPayload<{}>): Slide {
     ...(row.provisionalValue !== null ? { provisionalValue: row.provisionalValue } : {}),
     lens: toLens(row.lens),
     ceilingGuard: row.ceilingGuard,
+    ...(row.guardConfirmed ? { guardConfirmed: true } : {}),
     layer: row.layer,
   };
 }
@@ -155,18 +192,24 @@ export async function getDeal(id: string): Promise<Deal | undefined> {
 }
 
 /**
- * The whole record for one deal, in a single round trip.
+ * The whole record for one deal, minus the transcripts.
  *
  * Every page in the flow reads the full record — the status line alone needs
  * calls, observations, scores and slides — so fetching it as one nested query
  * beats six sequential ones on a serverless connection.
+ *
+ * The transcripts are the deliberate exception. They are by far the largest thing
+ * on a deal and exactly one page needs them, while every mutation revalidates this
+ * read. Selecting their length instead of their text is what makes pressing a
+ * score button feel immediate: `char_length` is computed in the database, so the
+ * bytes never cross the wire.
  */
 export async function getRecord(id: string): Promise<DealRecord | undefined> {
   const row = await db.deal.findUnique({
     where: { id },
     include: {
       owner: { select: { name: true } },
-      calls: { orderBy: { number: "asc" } },
+      calls: { select: CALL_META_SELECT, orderBy: { number: "asc" } },
       observations: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
       claims: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
       scores: {
@@ -179,9 +222,23 @@ export async function getRecord(id: string): Promise<DealRecord | undefined> {
   });
   if (!row) return undefined;
 
+  /**
+   * Transcript sizes, computed database-side. A second round trip rather than a
+   * bigger one: the nested include above cannot express a computed column, and
+   * two small queries beat one that carries the text.
+   */
+  const sizes = row.calls.length
+    ? await db.$queryRaw<{ id: string; chars: bigint }[]>`
+        SELECT id, char_length(transcript) AS chars
+        FROM "Call"
+        WHERE "dealId" = ${id}
+      `
+    : [];
+  const charsById = new Map(sizes.map((s) => [s.id, Number(s.chars)]));
+
   return {
     deal: toDeal(row),
-    calls: row.calls.map(toCall),
+    calls: row.calls.map((c) => toCallMeta({ ...c, transcriptChars: charsById.get(c.id) ?? 0 })),
     observations: row.observations.map(toObservation),
     claims: row.claims.map(toClaim),
     scores: row.scores.map(toScore),
@@ -195,4 +252,15 @@ export async function getRecord(id: string): Promise<DealRecord | undefined> {
 /** One call with its transcript, for the extraction step. */
 export async function getCall(callId: string) {
   return db.call.findUnique({ where: { id: callId } });
+}
+
+/**
+ * Every call on a deal *with* its transcript text.
+ *
+ * The counterpart to `getRecord` leaving transcripts out: the transcript page is
+ * the one place that needs the words, so it is the one place that pays for them.
+ */
+export async function getCallsWithTranscripts(dealId: string): Promise<Call[]> {
+  const rows = await db.call.findMany({ where: { dealId }, orderBy: { number: "asc" } });
+  return rows.map(toCall);
 }

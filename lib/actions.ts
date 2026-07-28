@@ -111,7 +111,16 @@ export async function addCallAction(raw: unknown): Promise<ActionResult<string>>
 export async function runExtractionAction(
   callId: string,
   options: { force?: boolean } = {},
-): Promise<ActionResult<{ observations: number; claims: number; dropped: number }>> {
+): Promise<
+  ActionResult<{
+    observations: number;
+    claims: number;
+    /** Quotes the model returned that were not literally in the transcript. */
+    droppedQuotes: string[];
+    /** Macro-dimensions whose call failed. A partial run still writes the rest. */
+    failedBlocks: { label: string; reason: string }[];
+  }>
+> {
   try {
     const actor = await requireAuthor();
     const summary = await capture.runExtractionForCall(actor, callId, { force: options.force });
@@ -121,7 +130,16 @@ export async function runExtractionAction(
       data: {
         observations: summary.observationsWritten,
         claims: summary.claimsWritten,
-        dropped: summary.droppedQuotes.length,
+        /**
+         * The dropped quotes themselves, not just a count.
+         *
+         * A count says "3 dropped as not verbatim", which reads as housekeeping. The
+         * text says which three, and that is what reveals the actual failure mode —
+         * a model tidying grammar as it quotes. Without seeing them, a thin
+         * extraction looks like a quiet transcript.
+         */
+        droppedQuotes: summary.droppedQuotes,
+        failedBlocks: summary.failedBlocks.map((f) => ({ label: f.label, reason: f.reason })),
       },
     };
   } catch (e) {
@@ -163,8 +181,10 @@ export async function setScoreAction(input: {
   dealId: string;
   subDimensionKey: string;
   value: ScoreValue;
+  /** Omitted on the normal path — the service cites the row's own evidence. */
   evidenceObsIds?: string[];
   flag?: boolean;
+  flagNote?: string;
 }): Promise<ActionResult> {
   try {
     const actor = await requireAuthor();

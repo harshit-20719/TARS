@@ -57,12 +57,17 @@ export function AddCallForm({
     }
     const ran = await extract.run(saved.data);
     if (ran.ok) {
+      const dropped = ran.data.droppedQuotes.length;
       setNote(
         `Drafted ${ran.data.observations} observation${ran.data.observations === 1 ? "" : "s"} and ` +
-          `${ran.data.claims} claim${ran.data.claims === 1 ? "" : "s"}` +
-          (ran.data.dropped > 0
-            ? ` — ${ran.data.dropped} quote${ran.data.dropped === 1 ? "" : "s"} dropped for not matching the transcript.`
-            : ". Review them before they become evidence."),
+          `${ran.data.claims} claim${ran.data.claims === 1 ? "" : "s"}. ` +
+          "Confident mappings are already cited as evidence on their rows." +
+          (dropped > 0
+            ? ` ${dropped} quote${dropped === 1 ? "" : "s"} dropped for not matching the transcript — see the call above.`
+            : "") +
+          (ran.data.failedBlocks.length > 0
+            ? ` ${ran.data.failedBlocks.length} of six blocks failed; re-run to try them again.`
+            : ""),
       );
       reset();
     } else {

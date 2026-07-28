@@ -16,7 +16,7 @@
  */
 
 import { hash } from "bcryptjs";
-import { getRecord, listDeals } from "../mock/data";
+import { FIXTURE_CALLS, getRecord, listDeals } from "../mock/data";
 import { fromLens, fromOriginTag, parseRecordDate } from "../lib/domain/codec";
 import { PrismaClient, Role, type ScoreType } from "@prisma/client";
 
@@ -81,7 +81,8 @@ async function seedRecord() {
     });
     counts.deals++;
 
-    for (const [i, c] of record.calls.entries()) {
+    // From the fixture calls, not record.calls — the record carries metadata only.
+    for (const [i, c] of (FIXTURE_CALLS[deal.id] ?? []).entries()) {
       await db.call.upsert({
         where: { dealId_number: { dealId: c.dealId, number: c.number } },
         update: { label: c.label, date: parseRecordDate(c.date), transcript: c.transcript, extracted: c.extracted },

@@ -25,6 +25,12 @@ export const SetSlideInput = z.object({
   value: z.coerce.number().int(),
   provisionalValue: z.coerce.number().int().nullable().optional(),
   ceilingGuard: z.string().trim().min(1, "Name what set the ceiling."),
+  /**
+   * Whether a human signed off on the guard line, or left the machine's
+   * suggestion standing. Defaults to false so a caller that does not know about
+   * confirmation cannot accidentally assert one.
+   */
+  guardConfirmed: z.coerce.boolean().optional(),
 });
 
 /**
@@ -57,6 +63,7 @@ export async function setSlide(actor: Actor, raw: unknown) {
     provisionalValue: input.provisionalValue ?? null,
     lens: fromLens(lens),
     ceilingGuard: input.ceilingGuard.trim(),
+    guardConfirmed: input.guardConfirmed ?? false,
     authorId: actor.id,
   };
 

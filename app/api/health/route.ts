@@ -19,6 +19,7 @@
 import { db } from "@/lib/db";
 import { adminEmails } from "@/lib/adminEmails";
 import { ALLOWED_EMAIL_DOMAIN } from "@/lib/auth.config";
+import { RUBRICS } from "@/framework";
 import { DEFAULT_EXTRACTION_MODEL, thinkingConfigFor } from "@/lib/extraction/extract";
 
 // Never prerender or cache — the whole point is the live state of this instance.
@@ -117,6 +118,14 @@ export async function GET() {
       extractionRequestShape: Object.keys(
         thinkingConfigFor(process.env.EXTRACTION_MODEL?.trim() || DEFAULT_EXTRACTION_MODEL),
       ).sort(),
+      /**
+       * How many concurrent calls one extraction makes — one per macro-dimension.
+       * Worth reporting because it is the number that decides whether a run fits in
+       * the function's time limit, and it is derived from the rubric rather than
+       * configured, so it changes if the framework does.
+       */
+      extractionBlocks: RUBRICS.length,
+      extractionEffort: process.env.EXTRACTION_EFFORT?.trim() || "low",
     },
     { status: 200 },
   );

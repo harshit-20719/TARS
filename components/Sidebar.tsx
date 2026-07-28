@@ -6,7 +6,16 @@ import { Icon } from "./icons";
 import type { StepView } from "@/lib/steps";
 import type { Deal } from "@/mock/types";
 
-export function Sidebar({ deal, steps }: { deal: Deal; steps: StepView[] }) {
+export function Sidebar({
+  deal,
+  steps,
+  views,
+}: {
+  deal: Deal;
+  steps: StepView[];
+  /** Cross-cutting readings of the record — the floor and the ledger. */
+  views: StepView[];
+}) {
   const pathname = usePathname();
   return (
     <aside className="sidebar">
@@ -35,6 +44,24 @@ export function Sidebar({ deal, steps }: { deal: Deal; steps: StepView[] }) {
                 </span>
                 <span className="step-name">{s.name}</span>
                 <span className="step-state">{s.state}</span>
+              </Link>
+            );
+          })}
+        </nav>
+      </div>
+
+      <div>
+        <div className="nav-label">Views</div>
+        <nav className="stepper">
+          {views.map((v) => {
+            const active = pathname === v.href;
+            return (
+              <Link key={v.seg} href={v.href} className="step" aria-current={active ? "page" : undefined}>
+                <span className={`step-dot flat ${v.done ? "done" : ""} ${v.alert ? "bad" : ""}`}>
+                  <Icon name={v.seg === "floor" ? "shield" : "ledger"} className="i sm" />
+                </span>
+                <span className="step-name">{v.name}</span>
+                <span className={`step-state ${v.alert ? "bad" : ""}`}>{v.state}</span>
               </Link>
             );
           })}

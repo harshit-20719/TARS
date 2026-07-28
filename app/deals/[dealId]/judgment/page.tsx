@@ -20,10 +20,14 @@ export default async function JudgmentPage({ params }: { params: Promise<{ dealI
   const isDraft = ft.pmConfirmation.startsWith("Draft");
 
   /**
-   * A first line for the ceiling guard, naming the rooted row that currently sets
-   * the ceiling under this slide's lens. Offered, never filled in: the guard is the
-   * anti-vibe rule, and a sentence the app wrote is not the PM's reasoning. It
-   * appears as a "use suggested guard" button they have to press.
+   * The ceiling guard's opening line, naming the rooted row that currently sets the
+   * ceiling under this slide's lens.
+   *
+   * Prefilled now rather than hidden behind a button — finding which row is lowest
+   * is mechanical, and making the PM retype it bought nothing. What is not
+   * mechanical is whether that row is genuinely what holds the read down, so the
+   * form asks them to confirm or rewrite the line and records which they did. An
+   * unconfirmed guard stays visibly the machine's.
    */
   function suggestGuard(def: Pillar | Track): string | undefined {
     const driver = driverRootKey(def.lens, def.rooted.map((r) => r.subKey), scores);
@@ -41,8 +45,9 @@ export default async function JudgmentPage({ params }: { params: Promise<{ dealI
         <h1 className="page-title">Judgment slides</h1>
         <p className="page-lede">
           Each pillar and track carries a 0–10 slide you author under its lens. The app shows the rooted sub-scores
-          as context — it never computes or averages the slide. At L1 the bankable ceiling is capped at {L1_CAP}; a
-          higher read is recorded as a provisional.
+          as context — it never computes or averages the slide. Press the number you actually believe: at L1 the
+          bankable ceiling is {L1_CAP}, so anything above it banks at {L1_CAP} and records the rest as a provisional,
+          pending verification.
         </p>
       </div>
 

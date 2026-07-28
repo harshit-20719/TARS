@@ -21,8 +21,15 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import { ExtractionOutputSchema, type DraftClaim, type DraftObservation, type ExtractionOutput } from "./schema";
-import { EXTRACTION_SYSTEM_PROMPT, buildExtractionUserMessage } from "./prompt";
+import { RUBRICS, type Rubric } from "@/framework";
+import {
+  ExtractionOutputSchema,
+  outputSchemaFor,
+  type DraftClaim,
+  type DraftObservation,
+  type ExtractionOutput,
+} from "./schema";
+import { buildExtractionUserMessage, systemPromptFor } from "./prompt";
 
 /** Default model. Sonnet 5 is the documented high-volume swap (spec D6). */
 export const DEFAULT_EXTRACTION_MODEL = "claude-opus-5";
@@ -146,7 +153,14 @@ export function describeApiFailure(e: unknown): string {
 export interface ExtractionClient {
   messages: {
     parse(params: Record<string, unknown>): Promise<{
-      parsed_output: ExtractionOutput | null;
+      /**
+       * A block's output, so no `rubricKey` — the caller knows which block it
+       * asked, and adds it. Asking the model for a value already known would only
+       * create a way for it to disagree with itself.
+       */
+      parsed_output: Omit<ExtractionOutput, "observations"> & {
+        observations: Omit<DraftObservation, "rubricKey">[];
+      } | null;
       stop_reason?: string | null;
       stop_details?: { category?: string | null; explanation?: string | null } | null;
     }>;
@@ -167,6 +181,13 @@ export interface ExtractionResult {
   droppedQuotes: string[];
   /** Claims whose anchor quote did not survive verification. */
   droppedClaims: string[];
+  /**
+   * Which macro-dimensions failed, if any. A partial result is kept rather than
+   * discarded: five blocks of evidence is worth having, and re-running only costs
+   * the PM another press. Surfaced so the failure is visible instead of looking
+   * like the transcript simply had nothing in it.
+   */
+  failedBlocks: { rubricKey: string; label: string; reason: string }[];
 }
 
 // ------------------------------------------------------------ verbatim guard
@@ -209,16 +230,33 @@ function resolveClient(injected?: ExtractionClient): ExtractionClient {
 }
 
 /**
- * Draft observations and claims from one transcript.
+ * Draft observations and claims from one transcript, one macro-dimension at a time.
  *
- * Thinking is left enabled at medium effort. Disabling it on this model tier can
- * make a tool call arrive as plain text and can leak internal tags into the
- * output — neither is worth risking for a marginal saving on a step whose output
- * a person is going to read line by line.
+ * **Why one call per block.** The first version sent one request against all
+ * forty-one rows and came back with a handful of observations from a forty-minute
+ * screening call. Two things caused that, and both are fixed by splitting: a model
+ * asked to hold forty-one rows in mind reports what stood out rather than working
+ * the list, and a single response carrying every row's evidence is a long
+ * generation — long enough to be the thing that ran the function out of time.
+ *
+ * Six smaller calls are better on all three axes at once. Each one sees six or
+ * seven rows with their full anchors and is told to go row by row, so it finds the
+ * ordinary middle-of-the-range evidence a sweep skips. Each response is a fraction
+ * of the size. And they run concurrently, so the wall clock is the slowest single
+ * block rather than the sum — comfortably inside the function's 60-second limit,
+ * where the single call was not.
+ *
+ * The cost is reading the transcript six times instead of once. Input tokens are
+ * the cheap half of the bill and this is where the quality was, so it is a good
+ * trade; at a few calls a week it is small change.
+ *
+ * **Partial results are kept.** If one block's call fails, the other five still
+ * wrote real evidence and throwing it away would waste both the tokens and the
+ * PM's wait. The failure is reported alongside the results instead.
  */
 export async function extractFromTranscript(
   input: ExtractionInput,
-  deps: { client?: ExtractionClient; model?: string } = {},
+  deps: { client?: ExtractionClient; model?: string; blocks?: readonly Rubric[] } = {},
 ): Promise<ExtractionResult> {
   if (!input.transcript.trim()) {
     throw new ExtractionError("cannot extract from an empty transcript");
@@ -227,23 +265,69 @@ export async function extractFromTranscript(
   const client = resolveClient(deps.client);
   // An empty EXTRACTION_MODEL should fall through to the default, hence || here.
   const model = deps.model ?? (process.env.EXTRACTION_MODEL || DEFAULT_EXTRACTION_MODEL);
+  const blocks = deps.blocks ?? RUBRICS;
+  const userMessage = buildExtractionUserMessage(input);
 
+  const settled = await Promise.allSettled(
+    blocks.map((rubric) => extractBlock(client, model, rubric, userMessage)),
+  );
+
+  const merged: ExtractionOutput = { observations: [], claims: [] };
+  const failedBlocks: ExtractionResult["failedBlocks"] = [];
+
+  settled.forEach((outcome, i) => {
+    const rubric = blocks[i];
+    if (outcome.status === "fulfilled") {
+      merged.observations.push(...outcome.value.observations);
+      merged.claims.push(...outcome.value.claims);
+      return;
+    }
+    const reason =
+      outcome.reason instanceof ExtractionError
+        ? outcome.reason.message
+        : String((outcome.reason as Error)?.message ?? outcome.reason);
+    failedBlocks.push({ rubricKey: rubric.key, label: rubric.label, reason });
+  });
+
+  // Every block failing is not a partial result, it is a failed run — and the
+  // reasons will all be the same one (a bad key, no credit), so report it as such.
+  if (failedBlocks.length === blocks.length) {
+    throw new ExtractionError(failedBlocks[0]?.reason ?? "extraction failed");
+  }
+
+  return { ...verifyDrafts(input.transcript, merged), failedBlocks };
+}
+
+/**
+ * One macro-dimension's pass. Rejects with an ExtractionError; the caller decides
+ * whether one block failing is fatal.
+ */
+async function extractBlock(
+  client: ExtractionClient,
+  model: string,
+  rubric: Rubric,
+  userMessage: string,
+): Promise<ExtractionOutput> {
   const { thinking, effort } = thinkingConfigFor(model);
   // Built outside the try so a schema problem here stays a programmer error
   // rather than being reported as an API failure.
   const params = {
     model,
-    // Under Haiku 4.5's 64k output ceiling, and comfortably above the pre-4.6
-    // thinking budget it has to exceed.
-    max_tokens: 16000,
-    system: EXTRACTION_SYSTEM_PROMPT,
+    /**
+     * Sized for one block rather than for the whole rubric. Seven rows with
+     * several quotes each is a few thousand tokens; 8000 leaves room without
+     * inviting a generation long enough to threaten the time limit. Still above
+     * the pre-4.6 thinking budget it has to exceed, and under Haiku 4.5's ceiling.
+     */
+    max_tokens: 8000,
+    system: systemPromptFor(rubric),
     thinking,
     output_config: {
       // Omitted entirely on pre-4.6 models, which reject it.
       ...(effort ? { effort } : {}),
-      format: zodOutputFormat(ExtractionOutputSchema),
+      format: zodOutputFormat(outputSchemaFor(rubric)),
     },
-    messages: [{ role: "user", content: buildExtractionUserMessage(input) }],
+    messages: [{ role: "user", content: userMessage }],
   };
 
   let response: Awaited<ReturnType<ExtractionClient["messages"]["parse"]>>;
@@ -253,7 +337,7 @@ export async function extractFromTranscript(
     // The one statement in this block is the API call, so everything from it is
     // an extraction failure — reported as a value the form can render instead of
     // escaping as an unhandled error.
-    throw new ExtractionError(describeApiFailure(e));
+    throw new ExtractionError(`${rubric.label}: ${describeApiFailure(e)}`);
   }
 
   // Check the refusal before reading content: on a refusal the content is empty
@@ -262,23 +346,31 @@ export async function extractFromTranscript(
   if (response.stop_reason === "refusal") {
     const category = response.stop_details?.category ?? "unspecified";
     throw new ExtractionError(
-      `the model declined to process this transcript (${category}); no drafts were written`,
+      `${rubric.label}: the model declined to process this transcript (${category})`,
     );
   }
 
   const parsed = response.parsed_output;
   if (!parsed) {
-    throw new ExtractionError("the model returned no parseable output");
+    throw new ExtractionError(`${rubric.label}: the model returned no parseable output`);
   }
 
-  return verifyDrafts(input.transcript, parsed);
+  // The block schema omits rubricKey — it is implied by which call this was, so
+  // asking the model for it would only create a way for it to be wrong.
+  return {
+    observations: parsed.observations.map((o) => ({ ...o, rubricKey: rubric.key })),
+    claims: parsed.claims,
+  };
 }
 
 /**
  * Apply the verbatim guard, and keep only the claims whose anchor survived it.
  * Split out from the API call so it can be tested directly.
  */
-export function verifyDrafts(transcript: string, parsed: ExtractionOutput): ExtractionResult {
+export function verifyDrafts(
+  transcript: string,
+  parsed: ExtractionOutput,
+): Omit<ExtractionResult, "failedBlocks"> {
   const observations: DraftObservation[] = [];
   const droppedQuotes: string[] = [];
 

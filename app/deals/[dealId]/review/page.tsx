@@ -15,39 +15,45 @@ export default async function ReviewPage({ params }: { params: Promise<{ dealId:
 
   const counts = {
     drafted: rec.observations.length,
-    accepted: rec.observations.filter((o) => o.status === "accepted").length,
-    edited: rec.observations.filter((o) => o.status === "edited").length,
+    needsPlacing: rec.observations.filter((o) => o.status === "draft").length,
+    filed: rec.observations.filter((o) => o.status === "accepted").length,
+    moved: rec.observations.filter((o) => o.status === "edited").length,
     rejected: rec.observations.filter((o) => o.status === "rejected").length,
   };
 
   return (
     <div className="page">
       <div className="page-head">
-        <span className="eyebrow">Step 2 · Review the machine&apos;s drafts</span>
-        <h1 className="page-title">Review drafts</h1>
+        <span className="eyebrow">Step 2 · Only what the machine could not place</span>
+        <h1 className="page-title">Review exceptions</h1>
         <p className="page-lede">
-          Accept, edit, or reject each drafted observation before it becomes evidence. The claim ledger opens at
-          status <em>claimed</em> — validation is an L2 activity.
+          Confidently mapped observations are already cited as evidence on their rows — you do not need to approve
+          them. What waits here is the quotes the machine placed but was unsure about. You can still reject or move
+          any quote from the capture row it sits on.
         </p>
       </div>
 
       <>
           <div className="summary" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))" }}>
             <div className="cell">
-              <span className="k">Drafted</span>
+              <span className="k">Extracted</span>
               <span className="v">{counts.drafted}</span>
             </div>
             <div className="cell">
-              <span className="k">Accepted</span>
-              <span className="v" style={{ color: "var(--good)" }}>
-                {counts.accepted}
+              <span className="k">To place</span>
+              <span className="v" style={{ color: counts.needsPlacing ? "var(--warn)" : "var(--good)" }}>
+                {counts.needsPlacing}
               </span>
             </div>
             <div className="cell">
-              <span className="k">Edited</span>
-              <span className="v" style={{ color: "var(--warn)" }}>
-                {counts.edited}
+              <span className="k">Filed as evidence</span>
+              <span className="v" style={{ color: "var(--good)" }}>
+                {counts.filed}
               </span>
+            </div>
+            <div className="cell">
+              <span className="k">Moved by you</span>
+              <span className="v">{counts.moved}</span>
             </div>
             <div className="cell">
               <span className="k">Rejected</span>

@@ -7,6 +7,7 @@ import type {
   Slide,
   FounderTypeRead,
   Call,
+  CallMeta,
 } from "./types";
 
 /**
@@ -203,10 +204,41 @@ const EMPTY_FOUNDER_TYPE = (dealId: string): FounderTypeRead => ({
   pmConfirmation: "",
 });
 
+/**
+ * The fixture calls with their transcripts.
+ *
+ * Kept separately from the records because the record contract carries call
+ * *metadata* only — the transcripts are the largest thing on a deal and only the
+ * transcript page reads them. The seed writes from here; the records below expose
+ * the metadata derived from it, so there is still one source for both.
+ */
+export const FIXTURE_CALLS: Record<string, Call[]> = {
+  halten: HALTEN_CALLS,
+  cirrus: [
+    {
+      id: "ccall1",
+      dealId: "cirrus",
+      number: 1,
+      label: "First founder call",
+      date: "19 Jul 2026",
+      transcript:
+        "[00:03] Meera: C&I sites are getting hit with demand charges they can't predict...",
+      extracted: true,
+    },
+  ],
+  parch: [],
+};
+
+const metaOf = (dealId: string): CallMeta[] =>
+  (FIXTURE_CALLS[dealId] ?? []).map(({ transcript, ...rest }) => ({
+    ...rest,
+    transcriptChars: transcript.length,
+  }));
+
 const RECORDS: Record<string, DealRecord> = {
   halten: {
     deal: DEALS[0],
-    calls: HALTEN_CALLS,
+    calls: metaOf("halten"),
     observations: HALTEN_OBS,
     claims: HALTEN_CLAIMS,
     scores: HALTEN_SCORES,
@@ -215,7 +247,7 @@ const RECORDS: Record<string, DealRecord> = {
   },
   cirrus: {
     deal: DEALS[1],
-    calls: [{ id: "ccall1", dealId: "cirrus", number: 1, label: "First founder call", date: "19 Jul 2026", transcript: "[00:03] Meera: C&I sites are getting hit with demand charges they can't predict...", extracted: true }],
+    calls: metaOf("cirrus"),
     observations: CIRRUS_OBS,
     claims: CIRRUS_CLAIMS,
     scores: CIRRUS_SCORES,
@@ -224,7 +256,7 @@ const RECORDS: Record<string, DealRecord> = {
   },
   parch: {
     deal: DEALS[2],
-    calls: [],
+    calls: metaOf("parch"),
     observations: [],
     claims: [],
     scores: [],

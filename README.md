@@ -49,19 +49,36 @@ The point of the record is that it can be trusted, so the rules are enforced in
 code rather than by convention:
 
 - **The machine never scores.** The extraction schema has no score field, so
-  there is nowhere for a rating to go. Asserted by test.
+  there is nowhere for a rating to go. Asserted by test. The one thing the model
+  does rate is its own filing — "am I sure this quote belongs to this row" — which
+  is a clerical question, and the vocabulary is fixed at high/low so it cannot
+  drift into being a score by another name.
+- **The machine does map, though, and the PM does not re-do it.** A confidently
+  mapped quote is cited as evidence on arrival; an unsure one waits in an
+  exception queue. The framework reserves the *score* for the PM, not the filing,
+  and making them approve every quote turned seven screening calls a week into
+  data entry. Rejecting or moving a quote stays available on the row itself.
 - **Quotes are verified against the transcript.** A model asked for a verbatim
   quote will sometimes return a tidied paraphrase. An unverifiable quote is worse
   than a missing one — a PM would later score a founder against a fabrication —
   so quotes that cannot be found in the source are dropped, and claims anchored
-  to them go with them.
+  to them go with them. The dropped quotes are shown, not counted: a paraphrasing
+  model otherwise looks exactly like a quiet transcript.
+- **A condition has to be readable.** "Advance with condition" was a bare boolean;
+  it now requires one line saying what the condition is, because one that nobody
+  can read is not actionable at IC.
 - **Slides are never derived.** Nothing averages, maxes, or weights the scores
   that root to a pillar. A slide is a human read or it is absent.
 - **The L1 cap binds the banked value only.** A higher read is recordable as a
-  provisional, which is the point of provisionals.
+  provisional, which is the point of provisionals. The form offers one 0–10 scale,
+  not two: pressing above the cap banks at the cap and records the rest as the
+  provisional. A provisional can therefore only arise where the cap is what is
+  stopping you, which is the only place it means anything.
 - **A slide requires its ceiling guard** — one line naming what set the ceiling.
   The anti-vibe rule, enforced in the domain rules and again as a database
-  constraint.
+  constraint. The line is prefilled from whichever rooted row is lowest under the
+  lens, because finding that is mechanical; whether it is genuinely what holds the
+  read down is not, so the slide records whether a human confirmed it.
 - **Authorship is server-side.** PM and ADMIN author; PARTNER reads. Checked on
   every mutation, not by hiding a button.
 - **Deletion is narrower than authoring.** Any PM may score any deal — that is
@@ -69,9 +86,15 @@ code rather than by convention:
   An ADMIN may delete any. The delete cascades, so the UI asks for the company
   name typed out rather than a confirm click.
 
-The seam: the UI reads `lib/data.ts` (`listDeals`, `getDeal`, `getRecord`) and
-nothing else. Swapping mock literals for database reads changed only those three
-functions and the `await` in front of them.
+The seam: the UI reads `lib/data.ts` (`listDeals`, `getDeal`, `getRecord`,
+`getCalls`) and nothing else. Swapping mock literals for database reads changed
+only those functions and the `await` in front of them.
+
+`getCalls` is separate from `getRecord` on purpose. The record carries call
+*metadata* only, because transcripts are by far the largest thing on a deal, every
+mutation revalidates the record, and exactly one page needs the words — while they
+travelled in the record, pressing one score button re-read every transcript on the
+deal out of the database and threw it away.
 
 Backend plan: [`docs/plans/2026-07-27-002-backend-l1-plan.md`](docs/plans/2026-07-27-002-backend-l1-plan.md).
 

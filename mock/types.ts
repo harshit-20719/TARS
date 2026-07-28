@@ -54,6 +54,23 @@ export interface Call {
   extracted: boolean;
 }
 
+/**
+ * A call without its transcript.
+ *
+ * The record carries this instead of the full `Call`, and the split is a
+ * performance rule rather than a modelling preference. Every page in the flow
+ * reads the whole record, and every mutation revalidates it — so while the
+ * transcript lived in here, pressing one score button re-read every transcript on
+ * the deal out of the database and threw them away. A forty-minute call is tens of
+ * kilobytes of text; six of them make each click feel broken.
+ *
+ * Only the transcript page needs the words, and it asks for them separately.
+ */
+export type CallMeta = Omit<Call, "transcript"> & {
+  /** Length of the transcript, so the UI can say "40k characters" without loading them. */
+  transcriptChars: number;
+};
+
 export interface Observation {
   id: string;
   dealId: string;
@@ -64,6 +81,14 @@ export interface Observation {
   speaker?: string;
   timestamp?: string;
   status: ObservationStatus;
+  /**
+   * How sure the machine was that this quote belongs to this row. Its own filing
+   * confidence — never a view on the founder, which stays the PM's to author.
+   * Absent on anything a human filed or re-mapped.
+   */
+  confidence?: "high" | "low";
+  /** One clause on why this row, read while scoring. */
+  mappingNote?: string;
   layer: Layer;
 }
 
@@ -85,6 +110,8 @@ export interface SubDimensionScore {
   evidenceObsIds: string[];
   /** e.g. a flagged-but-not-failed hygiene row (advance-with-condition). */
   flag?: boolean;
+  /** What the condition is, in one line. Required whenever `flag` is set. */
+  flagNote?: string;
   layer: Layer;
 }
 
@@ -99,6 +126,8 @@ export interface Slide {
   lens: Lens;
   /** Required one-line ceiling guard naming which sub-dimension set the ceiling. */
   ceilingGuard: string;
+  /** Whether a human confirmed that line, or left the machine's suggestion standing. */
+  guardConfirmed?: boolean;
   layer: Layer;
 }
 
@@ -117,7 +146,8 @@ export interface FounderTypeRead {
 /** Everything captured for one deal at one layer. The mock exposes one of these. */
 export interface DealRecord {
   deal: Deal;
-  calls: Call[];
+  /** Metadata only — the transcript page fetches the text it needs separately. */
+  calls: CallMeta[];
   observations: Observation[];
   claims: Claim[];
   scores: SubDimensionScore[];

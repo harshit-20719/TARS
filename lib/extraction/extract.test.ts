@@ -12,11 +12,12 @@ import {
 } from "./extract";
 import {
   DraftClaimSchema,
-  DraftObservationSchema,
   ExtractionOutputSchema,
+  outputSchemaFor,
   type ExtractionOutput,
 } from "./schema";
-import { EXTRACTION_SYSTEM_PROMPT } from "./prompt";
+import { systemPromptFor } from "./prompt";
+import { RUBRICS } from "@/framework";
 
 const TRANSCRIPT = `[00:02] Aparna: We spent four years inside mid-market bank operations.
 The reconciliation break that actually costs them happens at settlement cutover.
@@ -29,6 +30,25 @@ const output = (o: Partial<ExtractionOutput> = {}): ExtractionOutput => ({
   claims: [],
   ...o,
 });
+
+/** Fills in the fields every drafted observation now carries. */
+const obs = (o: Partial<ExtractionOutput["observations"][number]>) => ({
+  quote: "q",
+  rubricKey: "ft",
+  subDimensionKey: "earned-insight",
+  speaker: null,
+  timestamp: null,
+  confidence: "high" as const,
+  mappingNote: "why this row",
+  ...o,
+});
+
+/**
+ * Extraction fans out one call per macro-dimension, so tests that care about a
+ * single request pass `blocks: [ONE_BLOCK]`. Where a test is about the fan-out
+ * itself it uses the real RUBRICS.
+ */
+const ONE_BLOCK = RUBRICS[0];
 
 function stub(
   result: ExtractionOutput | null,
@@ -88,13 +108,11 @@ describe("the verbatim guard", () => {
 });
 
 describe("verifyDrafts", () => {
-  const good = {
+  const good = obs({
     quote: "We spent four years inside mid-market bank operations.",
-    rubricKey: "ft",
-    subDimensionKey: "earned-insight",
     speaker: "Aparna",
     timestamp: "00:02",
-  };
+  });
   const paraphrased = { ...good, quote: "We spent four years working in banks." };
 
   it("keeps verbatim observations and drops paraphrased ones", () => {
@@ -136,30 +154,121 @@ describe("verifyDrafts", () => {
 });
 
 describe("extractFromTranscript", () => {
-  it("sends the generated system prompt and the transcript", async () => {
+  it("sends the block's own system prompt and the transcript", async () => {
     const { client, calls } = stub(output());
-    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client });
+    await extractFromTranscript(
+      { transcript: TRANSCRIPT, callNumber: 1 },
+      { client, blocks: [ONE_BLOCK] },
+    );
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].system).toBe(EXTRACTION_SYSTEM_PROMPT);
+    expect(calls[0].system).toBe(systemPromptFor(ONE_BLOCK));
     expect(JSON.stringify(calls[0].messages)).toContain("mid-market bank operations");
+  });
+
+  /**
+   * The fan-out is the fix for both symptoms the first version had — too few
+   * observations and too slow. One call per macro-dimension, each reading the whole
+   * transcript against six or seven rows.
+   */
+  it("runs one call per macro-dimension and merges the results", async () => {
+    const calls: Record<string, unknown>[] = [];
+    const client: ExtractionClient = {
+      messages: {
+        parse: async (params) => {
+          calls.push(params);
+          // Each block returns one observation, keyed to a row it actually owns.
+          const rubric = RUBRICS.find((r) => params.system === systemPromptFor(r))!;
+          return {
+            parsed_output: {
+              observations: [
+                {
+                  quote: "We spent four years inside mid-market bank operations.",
+                  subDimensionKey: rubric.subs[0].key,
+                  speaker: null,
+                  timestamp: null,
+                  confidence: "high" as const,
+                  mappingNote: "n",
+                },
+              ],
+              claims: [],
+            },
+            stop_reason: "end_turn",
+          };
+        },
+      },
+    };
+
+    const r = await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client });
+
+    expect(calls).toHaveLength(RUBRICS.length);
+    expect(r.observations).toHaveLength(RUBRICS.length);
+    expect(r.failedBlocks).toEqual([]);
+    // The rubricKey comes from which call it was, never from the model.
+    expect(r.observations.map((o) => o.rubricKey).sort()).toEqual(RUBRICS.map((x) => x.key).sort());
+  });
+
+  /**
+   * A partial run is worth keeping: five blocks of real evidence beats none, and
+   * the tokens were already spent. What must not happen is the failure being
+   * invisible — a thin result would otherwise look like a quiet transcript.
+   */
+  it("keeps the blocks that succeeded when one fails, and names the one that did not", async () => {
+    const failing = RUBRICS[2];
+    const client: ExtractionClient = {
+      messages: {
+        parse: async (params) => {
+          if (params.system === systemPromptFor(failing)) {
+            throw Object.assign(new Error("boom"), { status: 429 });
+          }
+          return { parsed_output: output(), stop_reason: "end_turn" };
+        },
+      },
+    };
+
+    const r = await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client });
+    expect(r.failedBlocks).toHaveLength(1);
+    expect(r.failedBlocks[0].rubricKey).toBe(failing.key);
+    expect(r.failedBlocks[0].reason).toMatch(/rate limited/);
+  });
+
+  it("throws when every block fails, rather than reporting an empty success", async () => {
+    const client: ExtractionClient = {
+      messages: {
+        parse: async () => {
+          throw Object.assign(new Error("nope"), { status: 401 });
+        },
+      },
+    };
+    await expect(
+      extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client }),
+    ).rejects.toThrow(/ANTHROPIC_API_KEY is not valid/);
   });
 
   it("keeps thinking on, at the effort the latency budget allows", async () => {
     const { client, calls } = stub(output());
-    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client });
+    await extractFromTranscript(
+      { transcript: TRANSCRIPT, callNumber: 1 },
+      { client, blocks: [ONE_BLOCK] },
+    );
     expect(calls[0].thinking).toEqual({ type: "adaptive" });
     expect((calls[0].output_config as { effort: string }).effort).toBe("low");
   });
 
   it("defaults the model but honours EXTRACTION_MODEL", async () => {
     const { client, calls } = stub(output());
-    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client });
+    await extractFromTranscript(
+      { transcript: TRANSCRIPT, callNumber: 1 },
+      { client, blocks: [ONE_BLOCK] },
+    );
     expect(calls[0].model).toBe(DEFAULT_EXTRACTION_MODEL);
 
     vi.stubEnv("EXTRACTION_MODEL", "claude-sonnet-5");
     const second = stub(output());
-    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client: second.client });
+    await extractFromTranscript(
+      { transcript: TRANSCRIPT, callNumber: 1 },
+      { client: second.client, blocks: [ONE_BLOCK] },
+    );
     expect(second.calls[0].model).toBe("claude-sonnet-5");
     vi.unstubAllEnvs();
   });
@@ -167,14 +276,14 @@ describe("extractFromTranscript", () => {
   it("surfaces a refusal instead of reading empty content as a result", async () => {
     const { client } = stub(null, { stop_reason: "refusal", stop_details: { category: "cyber" } });
     await expect(
-      extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client }),
+      extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, blocks: [ONE_BLOCK] }),
     ).rejects.toThrow(/declined/);
   });
 
   it("throws when the model returns nothing parseable", async () => {
     const { client } = stub(null);
     await expect(
-      extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client }),
+      extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, blocks: [ONE_BLOCK] }),
     ).rejects.toThrow(ExtractionError);
   });
 
@@ -197,24 +306,55 @@ describe("extractFromTranscript", () => {
 describe("the output schema", () => {
   it("constrains sub-dimension keys to the frozen rubric", () => {
     const bad = ExtractionOutputSchema.safeParse(
-      output({
-        observations: [
-          { quote: "q", rubricKey: "ft", subDimensionKey: "invented-row", speaker: null, timestamp: null },
-        ],
-      }),
+      output({ observations: [obs({ subDimensionKey: "invented-row" })] }),
     );
     expect(bad.success).toBe(false);
   });
 
   it("accepts a real sub-dimension key", () => {
-    const good = ExtractionOutputSchema.safeParse(
-      output({
-        observations: [
-          { quote: "q", rubricKey: "ft", subDimensionKey: "earned-insight", speaker: null, timestamp: null },
-        ],
-      }),
-    );
+    const good = ExtractionOutputSchema.safeParse(output({ observations: [obs({})] }));
     expect(good.success).toBe(true);
+  });
+
+  /**
+   * The per-block schema is what makes cross-filing impossible rather than merely
+   * discouraged: the enum offered to each call holds only that block's rows, so a
+   * key from another block is a schema violation the SDK retries on.
+   */
+  it("narrows each block's schema to that block's own rows", () => {
+    const founders = RUBRICS[0];
+    const other = RUBRICS[1];
+    const schema = outputSchemaFor(founders);
+
+    const own = schema.safeParse({
+      observations: [
+        {
+          quote: "q",
+          subDimensionKey: founders.subs[0].key,
+          speaker: null,
+          timestamp: null,
+          confidence: "high",
+          mappingNote: "n",
+        },
+      ],
+      claims: [],
+    });
+    expect(own.success).toBe(true);
+
+    const foreign = schema.safeParse({
+      observations: [
+        {
+          quote: "q",
+          subDimensionKey: other.subs[0].key,
+          speaker: null,
+          timestamp: null,
+          confidence: "high",
+          mappingNote: "n",
+        },
+      ],
+      claims: [],
+    });
+    expect(foreign.success).toBe(false);
   });
 
   it("has nowhere to put a score", () => {
@@ -227,7 +367,8 @@ describe("the output schema", () => {
     // number.
     const fields = [
       ...Object.keys(ExtractionOutputSchema.shape),
-      ...Object.keys(DraftObservationSchema.shape),
+      ...Object.keys(ExtractionOutputSchema.shape.observations.element.shape),
+      ...Object.keys(outputSchemaFor(RUBRICS[0]).shape.observations.element.shape),
       ...Object.keys(DraftClaimSchema.shape),
     ];
     for (const f of fields) {
@@ -236,6 +377,16 @@ describe("the output schema", () => {
     // And nothing numeric anywhere — every leaf is a string or an enum of
     // strings, so there is no field a number could be written into at all.
     expect(JSON.stringify(ExtractionOutputSchema.shape)).not.toMatch(/"type":"(number|int)"/);
+  });
+
+  /**
+   * `confidence` is the one thing the model rates, and it must stay a rating of its
+   * own filing. Keeping the vocabulary to high/low is part of that: a numeric or
+   * strength-flavoured field here would be a score by another name.
+   */
+  it("offers only high and low confidence, so it cannot become a score", () => {
+    const element = outputSchemaFor(RUBRICS[0]).shape.observations.element;
+    expect(element.shape.confidence.options).toEqual(["high", "low"]);
   });
 });
 
@@ -284,29 +435,31 @@ describe("thinking config per model generation", () => {
   it("keeps the pre-4.6 budget below max_tokens, which the API requires", () => {
     const budget = (thinkingConfigFor("claude-haiku-4-5").thinking as { budget_tokens: number })
       .budget_tokens;
-    expect(budget).toBeLessThan(16000);
+    // max_tokens is sized for one block now, not for the whole rubric.
+    expect(budget).toBeLessThan(8000);
   });
 
   it("sends what the model generation accepts, end to end", async () => {
-    const seen: Record<string, unknown>[] = [];
-    const client: ExtractionClient = {
-      messages: {
-        parse: async (params) => {
-          seen.push(params);
-          return { parsed_output: { observations: [], claims: [] }, stop_reason: "end_turn" };
-        },
-      },
+    // One block each, so the assertions below read the request for the model named
+    // rather than whichever of six concurrent calls happened to land first.
+    const run = async (model: string) => {
+      const { client, calls } = stub(output());
+      await extractFromTranscript(
+        { transcript: TRANSCRIPT, callNumber: 1 },
+        { client, model, blocks: [ONE_BLOCK] },
+      );
+      return calls[0];
     };
-    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, model: "claude-haiku-4-5" });
-    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, model: "claude-opus-5" });
 
-    const [haiku, opus] = seen;
+    const haiku = await run("claude-haiku-4-5");
+    const opus = await run("claude-opus-5");
+
     expect(haiku.thinking).toEqual({ type: "enabled", budget_tokens: 4000 });
     expect((haiku.output_config as Record<string, unknown>).effort).toBeUndefined();
     expect(opus.thinking).toEqual({ type: "adaptive" });
     expect((opus.output_config as Record<string, unknown>).effort).toBe("low");
     // The schema travels either way — the authorship rule is not model-dependent.
-    for (const params of seen) {
+    for (const params of [haiku, opus]) {
       expect((params.output_config as Record<string, unknown>).format).toBeTruthy();
     }
   });

@@ -42,6 +42,18 @@ enum ObservationStatus {
   rejected
 }
 
+/// How sure the machine is that a quote belongs to the row it filed it under.
+///
+/// This is the machine rating its own *mapping*, never the founder. "Does this
+/// quote belong to this row" is a filing question; "is this founder strong" is a
+/// judgment, and the PM still authors every one of those (spec R5). The
+/// distinction is what lets a high-confidence mapping file itself: the PM's
+/// attention is spent on the score, not on re-checking clerical work.
+enum MappingConfidence {
+  high
+  low
+}
+
 /// Where a claim came from. Hyphenated on the wire to match the record type.
 enum OriginTag {
   founderVolunteered              @map("founder-volunteered")
@@ -129,6 +141,13 @@ model Observation {
   status          ObservationStatus @default(draft)
   layer           Layer             @default(L1)
 
+  /// How sure the machine was about the row it chose. Null on rows written
+  /// before this existed, and on anything a human filed or re-mapped by hand.
+  confidence MappingConfidence?
+  /// One clause on why this row — "names a specific paying customer". Read while
+  /// scoring, so a mis-filing is caught in place instead of in a separate pass.
+  mappingNote String?
+
   /// Who accepted / edited / rejected it, and when.
   decidedById String?
   decidedBy   User?     @relation("ObservationDecider", fields: [decidedById], references: [id], onDelete: SetNull)
@@ -182,6 +201,12 @@ model SubDimensionScore {
   value           String
   /// e.g. a hygiene row that is flagged but not failed (advance-with-condition).
   flag            Boolean   @default(false)
+  /// What the condition actually is, in one line.
+  ///
+  /// The flag was a bare boolean and that made it close to useless: "advance with
+  /// condition" is not actionable at IC unless somebody can read which condition.
+  /// Required by the service whenever flag is true.
+  flagNote        String?
   layer           Layer     @default(L1)
 
   /// Which frozen rubric version this score was set against (spec D2).
@@ -228,6 +253,16 @@ model Slide {
   lens             Lens
   /// Required one line naming which sub-dimension set the ceiling. The anti-vibe guard.
   ceilingGuard     String
+  /// Whether a human signed off on that line, as opposed to leaving the machine's
+  /// suggestion standing.
+  ///
+  /// The guard is prefilled now — the machine can find which rooted row is lowest
+  /// under the lens, which is most of the typing. What it cannot know is whether
+  /// that row is genuinely what holds the read down. So the text is offered and
+  /// this flag records whether anybody agreed: an unconfirmed guard is a
+  /// mechanical observation, a confirmed one is the PM's stated reason, and the
+  /// scorecard is allowed to say which it is looking at.
+  guardConfirmed   Boolean @default(false)
   layer            Layer  @default(L1)
 
   authorId String?

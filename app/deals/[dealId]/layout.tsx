@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { getDeal, getRecord } from "@/lib/data";
-import { stepsFor, progressOf } from "@/lib/steps";
+import { stepsFor, progressOf, viewsFor } from "@/lib/steps";
 import { computeRollup } from "@/lib/rollup";
 import { Sidebar } from "@/components/Sidebar";
 import { StatusLine, type StatusSeg } from "@/components/StatusLine";
@@ -17,6 +17,7 @@ export default async function DealLayout({
   if (!deal || !rec) notFound();
 
   const steps = stepsFor(dealId, rec);
+  const views = viewsFor(dealId, rec);
   const p = progressOf(rec);
   const roll = computeRollup(rec);
 
@@ -31,7 +32,7 @@ export default async function DealLayout({
 
   return (
     <div className="shell">
-      <Sidebar deal={deal} steps={steps} />
+      <Sidebar deal={deal} steps={steps} views={views} />
       <main className="main">{children}</main>
       <StatusLine segments={segments} />
     </div>

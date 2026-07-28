@@ -4,6 +4,7 @@ import { RUBRICS, type ScaleAnchors, type BinaryAnchors } from "@/framework";
 import { scoreMap } from "@/lib/judgment";
 import { ScorePill } from "@/components/ui";
 import { ScoreControl } from "@/components/authoring/ScoreControl";
+import { MacroBlock } from "@/components/authoring/MacroBlock";
 import { Icon } from "@/components/icons";
 
 export default async function CapturePage({ params }: { params: Promise<{ dealId: string }> }) {
@@ -33,8 +34,9 @@ export default async function CapturePage({ params }: { params: Promise<{ dealId
         <span className="eyebrow">Step 3 · You author every score</span>
         <h1 className="page-title">Capture scoring</h1>
         <p className="page-lede">
-          Score each sub-dimension 1–5 or pass/fail with the anchors shown, and attach at least one observation as
-          evidence. A score with no evidence is flagged incomplete, not counted.
+          Score each sub-dimension 1–5 or pass/fail against the anchors shown. The evidence is already attached —
+          every observation filed under a row is cited by its score, so the only thing left is the number. A row
+          with nothing filed under it still scores, and shows as incomplete.
         </p>
       </div>
 
@@ -66,18 +68,31 @@ export default async function CapturePage({ params }: { params: Promise<{ dealId
         </span>
       </div>
 
-      {RUBRICS.map((r) => {
+      {RUBRICS.map((r, i) => {
         const scoredCount = r.subs.filter((s) => scores.has(s.key)).length;
+        const floorRows = r.subs.filter((s) => s.floor);
+        const trippedHere = floorRows.filter((s) => {
+          const sc = scores.get(s.key);
+          return sc && sc.value === s.floor!.breachAt;
+        });
         return (
-          <div className="card" key={r.key}>
-            <div className="card-head">
-              <h2>{r.label}</h2>
-              <div className="spacer" />
-              <span className="count">
-                {scoredCount}/{r.subs.length} scored
-              </span>
-            </div>
-            <div className="card-body flush">
+          <MacroBlock
+            key={r.key}
+            title={r.label}
+            scored={scoredCount}
+            total={r.subs.length}
+            floorNote={
+              floorRows.length === 0
+                ? undefined
+                : trippedHere.length > 0
+                  ? `${trippedHere.length} floor tripped`
+                  : `${floorRows.length} floor row${floorRows.length === 1 ? "" : "s"}`
+            }
+            floorBad={trippedHere.length > 0}
+            // The first block opens so the page is not a wall of closed cards, and
+            // so the grid explains itself without a click.
+            defaultOpen={i === 0}
+          >
               <div className="tbl-wrap">
                 <table className="tbl">
                   <thead>
@@ -155,8 +170,7 @@ export default async function CapturePage({ params }: { params: Promise<{ dealId
                   </tbody>
                 </table>
               </div>
-            </div>
-          </div>
+          </MacroBlock>
         );
       })}
     </div>

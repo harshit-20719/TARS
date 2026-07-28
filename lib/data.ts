@@ -22,7 +22,7 @@
 
 import { connection } from "next/server";
 import * as repo from "@/lib/repo/records";
-import type { Deal, DealRecord } from "@/mock/types";
+import type { Call, Deal, DealRecord } from "@/mock/types";
 
 export async function listDeals(): Promise<Deal[]> {
   await connection();
@@ -37,4 +37,16 @@ export async function getDeal(id: string): Promise<Deal | undefined> {
 export async function getRecord(id: string): Promise<DealRecord | undefined> {
   await connection();
   return repo.getRecord(id);
+}
+
+/**
+ * The transcripts themselves, for the one page that shows them.
+ *
+ * A fourth function at the seam rather than a flag on `getRecord`, so that the
+ * cost is visible at the call site: a page that reads this is asking for tens of
+ * kilobytes per call, and it should be obvious which page that is.
+ */
+export async function getCalls(dealId: string): Promise<Call[]> {
+  await connection();
+  return repo.getCallsWithTranscripts(dealId);
 }

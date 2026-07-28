@@ -218,12 +218,32 @@ export async function runExtractionForCall(
    * into a failed write, and the model tokens were paid for either way. Four
    * queries instead of N, and a ceiling that a bad minute cannot reach.
    */
+  /**
+   * Rows written by this run, so the re-run delete and the id lookup can both
+   * address exactly them.
+   *
+   * This used to be `status: "draft"` for both, which worked only because every
+   * machine-written row was a draft. They are not any more — a confidently mapped
+   * observation is written already accepted (see below) — so the marker has to be
+   * something else. `confidence: { not: null }` is that marker: it is set on
+   * everything the machine files and on nothing a human does, including a re-map,
+   * which clears it.
+   */
+  const machineWritten = {
+    dealId: call.dealId,
+    callNumber: call.number,
+    confidence: { not: null },
+    decidedById: null,
+  } as const;
+
   const written = await db.$transaction(
     async (tx) => {
-      // Only drafts are cleared. Anything the PM ruled on stays.
-      await tx.observation.deleteMany({
-        where: { dealId: call.dealId, callNumber: call.number, status: "draft" },
-      });
+      /**
+       * Clear the machine's own previous drafts for this call, and nothing else.
+       * A row the PM has ruled on carries `decidedById`, so it survives a re-run —
+       * silently discarding a review pass is the one thing a re-extract must not do.
+       */
+      await tx.observation.deleteMany({ where: machineWritten });
 
       await tx.observation.createMany({
         data: result.observations.map((o) => ({
@@ -234,14 +254,29 @@ export async function runExtractionForCall(
           quote: o.quote,
           speaker: o.speaker,
           timestamp: o.timestamp,
-          status: "draft" as const,
+          /**
+           * A confident mapping files itself.
+           *
+           * The framework reserves *scoring* for the PM (spec R5). It does not ask
+           * them to hand-approve each quote, and treating it as though it did turned
+           * seven screening calls a week into clerical work: a PM confirming that a
+           * quote about a paying customer belongs under the customer row is not
+           * exercising judgment, they are doing data entry. So a high-confidence
+           * mapping lands as evidence directly, and an unsure one waits as a draft
+           * in the exception queue. The PM's attention goes on the score, which is
+           * the part only they can do — and re-mapping stays available in place, so
+           * nothing is locked in.
+           */
+          status: o.confidence === "high" ? ("accepted" as const) : ("draft" as const),
+          confidence: o.confidence,
+          mappingNote: o.mappingNote,
           layer: "L1" as const,
         })),
       });
 
       // createMany does not return ids, and claims need one to anchor to.
       const persisted = await tx.observation.findMany({
-        where: { dealId: call.dealId, callNumber: call.number, status: "draft" },
+        where: machineWritten,
         select: { id: true, quote: true },
       });
       const quoteToId = new Map(persisted.map((o) => [normaliseForComparison(o.quote), o.id]));
@@ -308,6 +343,16 @@ export async function decideObservation(actor: Actor, observationId: string, raw
       ...(input.quote !== undefined ? { quote: input.quote } : {}),
       ...(input.subDimensionKey !== undefined ? { subDimensionKey: input.subDimensionKey } : {}),
       ...(input.rubricKey !== undefined ? { rubricKey: input.rubricKey } : {}),
+      /**
+       * A re-map retires the machine's mapping metadata.
+       *
+       * Once a human has chosen the row, the model's confidence and its "why this
+       * row" note describe a filing that no longer exists — leaving them attached
+       * would show the PM a rationale for the wrong row. Clearing them also takes
+       * the row out of the re-extract's blast radius, which is the behaviour a PM
+       * expects: a correction should survive re-running the machine.
+       */
+      ...(input.subDimensionKey !== undefined ? { confidence: null, mappingNote: null } : {}),
       decidedById: actor.id,
       decidedAt: new Date(),
     },
@@ -320,8 +365,16 @@ export interface SetScoreInput {
   dealId: string;
   subDimensionKey: string;
   value: ScoreValue;
+  /**
+   * Which observations this score cites.
+   *
+   * Omit it and every non-rejected observation filed under the row is cited — see
+   * below. Pass an explicit list (including an empty one) to override that.
+   */
   evidenceObsIds?: string[];
   flag?: boolean;
+  /** What the condition is. Required when `flag` is true. */
+  flagNote?: string;
 }
 
 /**
@@ -331,6 +384,15 @@ export interface SetScoreInput {
  * caller, so a client cannot declare a binary row to be a scale row in order to
  * store a number on it. A score with no evidence is allowed and shows as
  * incomplete (spec D7) — a PM works in progress.
+ *
+ * **Evidence defaults to everything filed under the row.** Leaving
+ * `evidenceObsIds` out is the normal case, and it cites every observation on the
+ * row that has not been rejected. The alternative — which is what shipped first —
+ * was making the PM tick a checkbox per quote per row: forty-one rows of clicking
+ * to restate a mapping the machine had already made, with a database round trip
+ * per tick. It was also a trap, because a score saved before the ticking showed as
+ * having no evidence at all. Citing the row's evidence is the sane default; the
+ * PM's real lever is rejecting a quote, which removes it from every score at once.
  */
 export async function setScore(actor: Actor, input: SetScoreInput) {
   assertMayAuthor(actor);
@@ -338,9 +400,33 @@ export async function setScore(actor: Actor, input: SetScoreInput) {
 
   const sub = assertScoreValue(input.subDimensionKey, input.value);
   const encoded = encodeScoreValue(sub.type, input.value);
-  const evidenceObsIds = [...new Set(input.evidenceObsIds ?? [])];
 
-  if (evidenceObsIds.length) {
+  const flag = input.flag ?? false;
+  const flagNote = input.flagNote?.trim() || null;
+  /**
+   * A condition nobody can read is not a condition. The flag used to be a bare
+   * boolean, which meant "advance with condition" reached IC with no way to learn
+   * what the condition was.
+   */
+  if (flag && !flagNote) {
+    throw new RuleViolation("say what the condition is, in one line", "flagNote");
+  }
+
+  const evidenceObsIds =
+    input.evidenceObsIds !== undefined
+      ? [...new Set(input.evidenceObsIds)]
+      : (
+          await db.observation.findMany({
+            where: {
+              dealId: input.dealId,
+              subDimensionKey: input.subDimensionKey,
+              status: { not: "rejected" },
+            },
+            select: { id: true },
+          })
+        ).map((o) => o.id);
+
+  if (input.evidenceObsIds !== undefined && evidenceObsIds.length) {
     const found = await db.observation.count({
       where: { id: { in: evidenceObsIds }, dealId: input.dealId },
     });
@@ -361,14 +447,15 @@ export async function setScore(actor: Actor, input: SetScoreInput) {
           layer: "L1",
         },
       },
-      update: { scoreType: sub.type, value: encoded, flag: input.flag ?? false, authorId: actor.id },
+      update: { scoreType: sub.type, value: encoded, flag, flagNote, authorId: actor.id },
       create: {
         dealId: input.dealId,
         subDimensionKey: input.subDimensionKey,
         layer: "L1",
         scoreType: sub.type,
         value: encoded,
-        flag: input.flag ?? false,
+        flag,
+        flagNote,
         authorId: actor.id,
       },
       select: { id: true },

@@ -21,6 +21,15 @@ const PATHS: Record<string, ReactNode> = {
       <circle cx="12" cy="12" r="4" />
     </>
   ),
+  /** The floor check — a shield, for the rows that have to hold before anything else. */
+  shield: <path d="M12 3l7 3v6c0 4-3 6.5-7 9-4-2.5-7-5-7-9V6l7-3z" />,
+  /** The claim ledger — a bound list of things somebody has to go and verify. */
+  ledger: (
+    <>
+      <path d="M5 3h13a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H5z" />
+      <path d="M5 8h14M9 3v18" />
+    </>
+  ),
 };
 
 export function Icon({ name, className = "i" }: { name: string; className?: string }) {

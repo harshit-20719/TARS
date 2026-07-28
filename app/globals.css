@@ -491,3 +491,82 @@ svg.i.sm { width: 13px; height: 13px; }
 .auth-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 .slide-auth { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
+
+/* What a slide press means, once the cap is applied. Prose rather than a second
+   control — the whole reason there is only one 0-10 strip now. */
+.slide-split { font-size: 12px; color: var(--ink-2); padding: 6px 9px; margin: 2px 0 8px;
+  border-left: 2px solid var(--line); background: var(--surface-2); }
+.slide-split.capped { border-left-color: var(--warn); background: var(--warn-tint); color: var(--warn); }
+.slide-split b { font-family: var(--font-data); }
+
+/* ---------------------------------------------------------------- authoring */
+
+.btn.xs { padding: 2px 7px; font-size: 11px; gap: 4px; }
+.inp.sm { padding: 4px 8px; font-size: 12px; }
+
+/* Evidence cited by a score. A read-out, not a picker — the machine's mapping is
+   the citation, and what stays interactive is rejecting or moving a quote. */
+.ev-list { margin-top: 7px; font-size: 11.5px; }
+.ev-head { font-family: var(--font-data); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--ink-3); margin-bottom: 3px; }
+.ev-head .ev-rej { color: var(--ink-3); opacity: 0.75; }
+.ev-item { padding: 6px 0; border-top: 1px solid var(--line-2); }
+.ev-quote { color: var(--ink-2); line-height: 1.45; }
+.ev-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 4px; }
+.ev-meta .st { font-family: var(--font-data); font-size: 10px; color: var(--ink-3); }
+/* The model's one clause on why this row. Italic so it never reads as the quote. */
+.ev-why { font-size: 10.5px; font-style: italic; color: var(--ink-3); }
+.ev-actions { display: flex; gap: 4px; margin-left: auto; }
+
+/* The condition attached to a flagged row, once written. */
+.cond-note { font-size: 11px; color: var(--warn); background: var(--warn-tint);
+  padding: 3px 7px; margin-top: 4px; }
+
+/* Why the machine filed an unsure draft where it did, on the exception queue. */
+.obs-why { font-size: 11.5px; font-style: italic; color: var(--ink-3); margin-top: 4px; }
+
+/* Collapsible macro-dimension. The header is the button, so the whole bar is the
+   hit area rather than a caret. */
+.card.mb { overflow: hidden; }
+.mb-head { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  padding: 13px 18px; background: transparent; border: 0; cursor: pointer; color: inherit;
+  font: inherit; transition: background 0.15s; }
+.mb-head:hover { background: var(--surface-3); }
+.card.mb.open .mb-head { border-bottom: 1px solid var(--line-2); }
+.mb-head h2 { font-family: var(--font-data); font-size: 12.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em; margin: 0; }
+.mb-head .spacer { flex: 1; }
+.mb-head .count { font-family: var(--font-data); font-size: 12px; color: var(--ink-3); }
+.mb-head .count.done { color: var(--good); }
+.mb-caret { font-size: 10px; color: var(--ink-3); transition: transform 0.15s; display: inline-block; }
+.mb-caret.open { transform: rotate(90deg); }
+
+/* Floor rows that are tripped, in the floor table. */
+.tbl tr.row-bad > td { background: var(--bad-tint); }
+.tbl tr.row-warn > td { background: var(--warn-tint); }
+
+/* Floor banner, third state: scored nothing yet. Unscored is not clear. */
+.floor-banner.open { background: var(--warn-tint); color: var(--warn); }
+
+/* Sidebar entries that are views rather than numbered steps. */
+.step-dot.flat { border-radius: var(--r-ctl); background: var(--surface-3);
+  border-color: var(--line); color: var(--ink-3); }
+.step-dot.flat.done { background: var(--good-tint); border-color: var(--good); color: var(--good); }
+.step-dot.flat.bad { background: var(--bad-tint); border-color: var(--bad); color: var(--bad); }
+.step-state.bad { color: var(--bad); }
+
+/* The anchor quote under a claim in the ledger — the words the claim rests on. */
+.c-anchor { margin: 7px 0 5px; padding: 7px 11px; border-left: 2px solid var(--accent);
+  background: var(--surface-2); font-size: 12.5px; line-height: 1.5; color: var(--ink-2); }
+.c-anchor cite { display: block; margin-top: 5px; font-style: normal;
+  font-family: var(--font-data); font-size: 10px; color: var(--ink-3); }
+
+/* Quotes discarded for not being verbatim, and blocks that failed. Shown, not
+   counted — a count reads as housekeeping and hides a paraphrasing model. */
+.drop-note { flex-basis: 100%; font-size: 11.5px; margin-top: 6px; }
+.drop-note > summary { cursor: pointer; color: var(--warn); font-family: var(--font-data);
+  font-size: 11px; }
+.drop-note > summary:hover { color: var(--ink); }
+.drop-note p { color: var(--ink-3); font-size: 11px; margin: 6px 0 0; }
+.drop-list { margin: 6px 0 0; padding-left: 18px; color: var(--ink-2); line-height: 1.5; }
+.drop-list li { margin-bottom: 4px; }

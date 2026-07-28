@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getDeal, getRecord } from "@/lib/data";
+import { getCalls, getDeal, getRecord } from "@/lib/data";
 import { AddCallForm } from "@/components/authoring/AddCallForm";
 import { RunExtractionButton } from "@/components/authoring/RunExtractionButton";
 import { DeleteCall } from "@/components/authoring/DeleteCall";
@@ -20,7 +20,9 @@ export const maxDuration = 60;
 
 export default async function TranscriptPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
-  const [deal, rec] = await Promise.all([getDeal(dealId), getRecord(dealId)]);
+  // The transcripts are fetched here and only here — the record deliberately
+  // leaves them out so every other page and every save stays small.
+  const [deal, rec, calls] = await Promise.all([getDeal(dealId), getRecord(dealId), getCalls(dealId)]);
   if (!deal || !rec) notFound();
 
   // Read on the server: the key must never reach the browser, and the form only
@@ -39,12 +41,12 @@ export default async function TranscriptPage({ params }: { params: Promise<{ dea
         </p>
       </div>
 
-      {rec.calls.length === 0 ? (
+      {calls.length === 0 ? (
         <div className="card">
           <div className="empty">No transcript yet. Paste the first founder call below to open the record.</div>
         </div>
       ) : (
-        rec.calls.map((c) => {
+        calls.map((c) => {
           const drafted = rec.observations.filter((o) => o.callNumber === c.number).length;
           return (
             <div className="card" key={c.id}>
