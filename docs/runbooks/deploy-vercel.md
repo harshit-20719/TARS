@@ -53,30 +53,30 @@ The cost is reading the transcript six times instead of once. Input tokens are t
 cheap half of the bill, so a rough per-transcript cost — a 45-minute call, about
 15k tokens in per block and 1k out:
 
-| Model | Per transcript | Notes |
-|---|---|---|
-| `claude-opus-5` (default) | ~$1.50 | Strongest at picking the right row from anchor text |
-| `claude-sonnet-5` | ~50¢ | Introductory pricing until 31 Aug 2026, then ~75¢ |
-| `claude-haiku-4-5` | ~15¢ | Cheapest and fastest; weakest at the mapping |
+| Model | Per transcript | Per month at ~8 calls/week | Notes |
+|---|---|---|---|
+| `claude-sonnet-5` (default) | ~50¢ | **~$16** | Introductory pricing until 31 Aug 2026, then ~75¢ |
+| `claude-opus-5` | ~$1.50 | ~$48 | Strongest at picking the right row from anchor text |
+| `claude-haiku-4-5` | ~15¢ | ~$5 | Cheapest and fastest; weakest at the mapping |
 
-At seven or eight screening calls a week that is roughly **$15–20 a month on
-Sonnet**, or **$5 on Haiku**. Set `EXTRACTION_MODEL` to switch; nothing else
-changes.
+Set `EXTRACTION_MODEL` to switch; nothing else changes.
 
-Opus is the default because a PM reads every drafted quote, and a mis-mapped
-observation costs more attention than the difference in cents. The gap that
-matters is not the quoting — that is easy, and quotes that are not verbatim get
-dropped before they are written either way. It is choosing the right row from
-anchor text, and tagging whether the founder volunteered a claim or merely agreed
-with the interviewer's framing. Both are judgment, and both are where a smaller
-model gives up the most.
+Sonnet 5 is the default, resolving spec D6 the way the plan recommended (KTD4).
+The machine at this step quotes, files, and tags — it never judges — so the tier
+buys mapping accuracy rather than judgment. Quoting is the easy half and is
+guarded anyway: a quote that is not literally in the transcript is dropped before
+it is written, whatever the model. What the tier actually buys is choosing the
+right row from anchor text, and tagging whether the founder volunteered a claim or
+merely agreed with the interviewer's framing.
 
-The block split narrows that gap, though: each call now chooses between six or
-seven rows rather than forty-one, and the schema makes a cross-block answer
-impossible rather than merely unlikely. If cost matters more than the last few
-percent of mapping accuracy, **Sonnet 5 is the recommended swap** and Haiku is
-defensible — the exception queue catches what it gets wrong, because the model
-reports its own uncertainty and anything it is unsure of waits for a person.
+The block split narrowed that gap enough to make the cheaper tier the sensible
+default: each call now chooses between six or seven rows rather than forty-one,
+and the schema makes a cross-block answer impossible rather than merely unlikely.
+The model also reports its own uncertainty, so what it is unsure of waits for a
+person in the exception queue rather than filing itself.
+
+Opus is worth the switch if mis-mapping ever becomes the thing costing PM
+attention; Haiku is defensible if cost matters more than the last few percent.
 
 > Anthropic sells prepaid credits with a minimum purchase (usually \$5), so
 > that is the practical floor for trying extraction at all.

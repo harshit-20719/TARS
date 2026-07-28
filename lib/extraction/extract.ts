@@ -31,8 +31,21 @@ import {
 } from "./schema";
 import { buildExtractionUserMessage, systemPromptFor } from "./prompt";
 
-/** Default model. Sonnet 5 is the documented high-volume swap (spec D6). */
-export const DEFAULT_EXTRACTION_MODEL = "claude-opus-5";
+/**
+ * Default model, resolving spec D6 in favour of Sonnet 5.
+ *
+ * Splitting extraction into one call per macro-dimension sends the transcript six
+ * times, which multiplied the per-transcript cost on the Opus tier. Sonnet 5 is
+ * what the plan recommended for this step all along (KTD4): the machine here
+ * quotes, files, and tags — it never judges — and the block split narrowed the
+ * hardest part of the job, since each call now chooses between six or seven rows
+ * rather than forty-one, with a schema that makes a cross-block answer impossible.
+ * What it gets wrong it also tends to flag: an unsure mapping reports itself and
+ * waits for a person, so the exception queue absorbs the difference.
+ *
+ * `EXTRACTION_MODEL` still overrides this without a code change.
+ */
+export const DEFAULT_EXTRACTION_MODEL = "claude-sonnet-5";
 
 /**
  * How to ask a given model to think.
