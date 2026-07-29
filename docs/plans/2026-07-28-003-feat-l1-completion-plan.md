@@ -17,16 +17,17 @@ deepened: 2026-07-28
 - **Objective:** Close the gap between an L1 tool that works and one a team can run — the app says who you are, deals have visible owners you can hand over, transcripts arrive from Fireflies instead of the clipboard, a PM can see which rubrics hold no evidence yet, and access ends when a session expires rather than never.
 - **Product authority:** This plan owns identity, roles, deal ownership, transcript ingestion, and capture coverage at L1. The L2 layer — claim verification, structural reads, layer comparison — is not active scope here and is planned separately in `docs/plans/2026-07-28-004-feat-l2-verification-core-plan.md`.
 - **Execution profile:** Additive except session lifetime. No migration rewrites existing rows, the paste path keeps working untouched, and one additive migration adds two nullable columns — but R23 pins session bounds where none were set, so everyone re-authenticates on a cycle.
-- **Stop conditions:** Step 0 in Sequencing settles two assumptions against a real Fireflies key before U5 begins. Stop and ask if the credential turns out to be scoped to a single user rather than the workspace. Stop and ask if participant matching turns out to be email-only server-side, since R22 and AE7 then promise more than search delivers.
+- **Stop conditions:** Step 0 in Sequencing settles one remaining assumption against a real Fireflies key before U5 begins. Stop and ask if participant matching turns out to be email-only server-side, since R22 and AE7 then promise more than search delivers — and with the list no longer scoped per person (R11), search is the only way to find a call rather than a convenience on top of a short list.
 - **Open blockers:** None.
 
-**Product Contract preservation:** changed — four requirements added, one widened, two amended, one narrowed. Each came from a review finding the user then confirmed.
+**Product Contract preservation:** changed — four requirements added, one widened, three amended, one narrowed. Each came from a review finding the user then confirmed, except the R11 amendment of 2026-07-29, which came from the user establishing a fact about their Fireflies setup.
 
 - R22 added: meeting-list identifiability, because Fireflies meeting titles follow no convention in practice.
 - R23 added: session bounds. Sessions were never re-checked and never expired for an active user, so a removed person kept read access to every transcript indefinitely.
 - R24, R25 added: import attribution and duplicate detection. The build allows retrieving any workspace transcript, and nothing recorded who did it.
 - R16 widened from disclosing *listing* to disclosing *retrieval*. The original text understated what the feature does.
-- R11 amended: the meeting list defaults to the signed-in user's own meetings with a control to widen. Listing the whole workspace by default buried the call a PM actually wanted.
+- R11 amended (2026-07-28): the meeting list defaults to the signed-in user's own meetings with a control to widen. Listing the whole workspace by default buried the call a PM actually wanted.
+- R11 amended again (2026-07-29), reversing that: **Biome records every call on one shared Fireflies account and nobody uses a personal one.** There is no per-person scope to default to — `host_email` is the same value for every meeting — so the scoped default and the widen control both describe a distinction that does not exist. One list, everything on it. The consequence is that R16's disclosure and R24's attribution become the only controls, and search (R22, AE7) stops being a convenience and becomes the only way to find a call.
 - R17 amended: coverage states renamed from question language to evidence language. The record knows whether a quote was mapped to a row, not whether a question was asked.
 - R2 narrowed: an ADMIN cannot demote the last ADMIN (KTD12).
 - Two stale citations corrected: the deal-identifier Key Decision now governs R21 (was R16, a renumbering artefact), and the SSO dependency note now cites R16 (was R17).
@@ -65,7 +66,7 @@ A last gap opens once a deal runs past its first call, which L1 explicitly allow
 - **Imported transcripts keep their speaker labels.** Spec §3 deferred diarization because paste made it expensive; Fireflies makes it free, and `Observation.speaker` already carries it end to end. Governs R13.
 - **Coverage reads evidence, not questions.** The record knows whether a quote was mapped to a row. It cannot know whether a question was asked, since a founder can answer something that yields no mapped quote. The three states are named for what is recorded so the reading never claims more than it knows. Governs R17.
 - **Coverage is shown, never enforced.** Spec §3 defers coverage percentages and readiness thresholds; this plan builds the reading and leaves the gate deferred, which keeps it consistent with the framework's rule that the app renders facts and returns no verdict. Governs R20.
-- **TARS connects to Fireflies once, for the whole workspace, not per user.** Nothing is stranded because a call was recorded by a colleague. The accepted consequence is larger than browsing: every TARS user can also pull the full transcript of any workspace recording — a board discussion, a one-to-one — onto a deal of their choosing. Scoping the *list* to the signed-in user's own meetings is what R11 does, using the documented `host_email` and `participant_email` filters; scoping *retrieval* is possible by the same means and was rejected, because it would strand a call a colleague recorded. Attribution (R24) is therefore a chosen trade rather than the only available control. Governs R11, R16, R24.
+- **TARS connects to Fireflies once, and there is only one connection to make.** Biome records every call on a single shared Fireflies account; nobody uses a personal one. So the shared connection is not a trade-off the product chose — it is the only shape the account structure allows. Nothing is stranded because a colleague recorded a call, because every recording already belongs to the same account. The consequence is that **every TARS user can list, and pull the full transcript of, any call Biome has ever recorded** — a board discussion, a one-to-one. Scoping cannot mitigate it: `host_email` is identical across every meeting, so there is no per-person filter to apply. Disclosure (R16) and attribution (R24) are therefore not a chosen trade but the only available controls, and the `biome.in` domain restriction is the only bound on who reaches them. Governs R11, R16, R24.
 - **Access ends when the session expires; removing the account does not end it.** Nothing on the sign-in path requires a user row to exist — the callback checks the domain and a verified address only — so a deleted row is recreated at the schema default on the next Google sign-in, as an authoring role. Real removal is suspending the person's `biome.in` Google account; R23's bounds are what limit the session already issued. Governs R23.
 - **A meeting is identified by its participants, not its title.** Meeting titles follow no convention in practice — `Biome <> Founder`, `PM <> Founder`, and `Biome <> Company` all occur — so a title-only list would leave a PM guessing. Governs R22.
 
@@ -97,12 +98,12 @@ A last gap opens once a deal runs past its first call, which L1 explicitly allow
 
 **Transcript ingestion**
 
-- R11. A PM can import a call transcript from Fireflies. The meeting list opens on meetings the signed-in user hosted or attended, with a control to widen it to the whole workspace.
+- R11. A PM can import a call transcript from Fireflies. The list shows the shared account's meetings — all of them, since that account holds every call Biome records and no per-person scope exists to narrow it to.
 - R12. Pasting a transcript stays available and behaves as it does today.
 - R13. Speaker labels on an imported transcript reach the observations drafted from it.
 - R14. An imported call carries a call number and a label, supplied the same way a pasted call supplies them.
 - R15. No meeting is ever attached to a deal without a person choosing it.
-- R16. The import screen states what the feature actually reaches: any meeting the workspace has recorded can be listed and its full transcript pulled onto a deal, not only the signed-in user's own meetings.
+- R16. The import screen states what the feature actually reaches: any meeting Biome has recorded can be listed and its full transcript pulled onto a deal. With no scoping available (R11), this line is one of only two controls on that reach — the other is R24's attribution.
 - R22. Each meeting in the list is identifiable without relying on its title: participants and date are shown alongside it, and search matches participants as well as title. (Numbered after R21 because IDs are never renumbered; it belongs to this group.)
 - R24. An imported call records who imported it and which Fireflies meeting it came from, and that record outlives deletion of the importer's account.
 - R25. Importing a meeting already present on the deal tells the person so before it is saved a second time.
@@ -123,7 +124,7 @@ A last gap opens once a deal runs past its first call, which L1 explicitly allow
 - F1. Import a transcript from Fireflies
   - **Trigger:** A PM opens a deal's transcript page after recording a founder call.
   - **Actors:** A1, A4
-  - **Steps:** The PM chooses to import; TARS lists their own recent Fireflies meetings with title, participants, date, and duration, with a control to widen to the workspace; the PM searches or scrolls and selects one; TARS fetches the transcript; the PM confirms the call number and label; the call is saved with its speaker labels intact and the importer recorded.
+  - **Steps:** The PM chooses to import; TARS lists the shared account's recent meetings with title, participants, date, and duration; the PM searches for the founder or company and selects one; TARS fetches the transcript; the PM confirms the call number and label; the call is saved with its speaker labels intact and the importer recorded.
   - **Outcome:** A call exists on the deal, ready for extraction, with no text moved by hand.
   - **Covers R11, R13, R14, R15, R22, R24.**
 
@@ -231,8 +232,8 @@ A last gap opens once a deal runs past its first call, which L1 explicitly allow
 ### Dependencies and Assumptions
 
 - Fireflies exposes a GraphQL API with a `transcripts` list query (arguments include `title`, `fromDate`/`toDate`, `limit` capped at 50, `skip`, `host_email`, `participant_email`, `organizers`, `participants`) and per-sentence speaker attribution via `sentences.speaker_name`. **Verified against published documentation**, not against a live key.
-- A single Fireflies credential reaches the workspace's meetings rather than only its owner's. **Unverified** — settled by Sequencing step 0.
-- Participant matching works by **name**, not only by email address. **Unverified** — settled by the same step. Every documented participant filter is address-shaped, so if name matching is unsupported server-side it can only run over the loaded page of 50, and R22 and AE7 overstate what search does.
+- A single Fireflies credential reaches every meeting Biome records. **Settled 2026-07-29 by the user, not by a key:** Biome uses one shared Fireflies account for all recording and nobody uses a personal one, so the question of reaching a colleague's meetings does not arise — there are no per-person accounts to reach across.
+- Participant matching works by **name**, not only by email address. **Unverified** — the one thing Sequencing step 0 still has to settle. Every documented participant filter is address-shaped, so if name matching is unsupported server-side it can only run over the loaded page of 50, and R22 and AE7 overstate what search does. This matters more since R11 dropped scoping: search is now the only way to find a call in a list of everything Biome has recorded, rather than a convenience on top of a short personal list.
 - Google SSO is domain-restricted to `biome.in` (backend plan B7), so everyone with an account is internal. This is what bounds the exposure R16 discloses.
 - Removing someone's access requires suspending their `biome.in` Google account. Nothing in TARS can achieve it, because sign-in requires no pre-existing row and rows are created on first sign-in.
 - Sessions are JWT-strategy with the role in the token and no database re-check, which is why R3 lands at next sign-in, why R23 needs both an idle and an absolute bound, and why deleting an account does not end a session.
@@ -274,7 +275,7 @@ This plan owns what L1 still needs before a team can run it. The breakdown below
 - KTD5. **The coverage grid is its own pure derivation; only a cheap count belongs on `progressOf`.** The cost is compute, not contract: `app/deals/page.tsx` calls `progressOf` inside a per-deal loop over full records, so a per-call, 41-row derivation there makes the index pay for data one page reads. The sidebar badge needs a single unevidenced-count, which is one pass; the three-state per-call grid stays in its own module. Governs R17, R18, R19.
 - KTD6. **Partner authoring is one entry in `AUTHOR_ROLES`, not a per-artifact capability model.** (session-settled: user-directed — chosen over per-artifact authorization: partners author on the same terms as PMs, so there is nothing left to differentiate.) Governs R5.
 - KTD7. **Role changes write the stored role and take effect at next sign-in.** Sessions are JWT-strategy and carry `role` in the token, so a stored change cannot reach a live session without invalidating it. The page states this rather than implying immediacy. Governs R2, R3, R4.
-- KTD8. **The import list is built from the `transcripts` query with `limit`/`skip` pagination.** Fireflies caps `limit` at 50, so the list pages rather than fetching everything, and the default scope uses `host_email`/`participant_email` so the common case fits one page. Governs R11, R22.
+- KTD8. **The import list is built from the `transcripts` query with `limit`/`skip` pagination.** Fireflies caps `limit` at 50, so the list pages rather than fetching everything. It no longer applies a default `host_email`/`participant_email` scope: with one shared recording account those filters are identical for every meeting (R11), so paging and search carry the whole load of finding a call. Governs R11, R22.
 - KTD9. **"Mine" filters at the query level.** `listDeals` takes an optional owner filter rather than the page filtering an already-fetched list, so the behavior stays correct as the deal count grows. Governs R7.
 - KTD10. **The Fireflies credential is read on the server and never reaches the browser.** `app/deals/[dealId]/transcript/page.tsx` already sets this precedent for the Anthropic key — it reads the environment server-side and passes the client component only a boolean saying whether the offer is available. Governs R11.
 - KTD11. **The Fireflies actions are guarded with `requireAuthor` for consistency with every other action, and that guard narrows nothing today.** `Role` has three members and U1 admits all of them, so "authoring actor" and "authenticated user" are the same set once U1 lands. The guard is a regression barrier for any future read-only role, not a control — the `biome.in` domain restriction is the only real bound on who reaches the meeting list. Governs R11, R16.
@@ -289,7 +290,7 @@ The import path is the only new data flow, and its non-obvious property is that 
 ```mermaid
 flowchart TB
   A["Fireflies GraphQL<br/>transcripts query"] --> B["Boundary module<br/>returns plain records"]
-  B --> C["Meeting list — own meetings,<br/>widen to workspace"]
+  B --> C["Meeting list — every meeting<br/>on the shared account"]
   C --> D["PM chooses one<br/>(never automatic)"]
   D --> E{"Call number free?<br/>Meeting not already here?"}
   E -->|no| F["Refused — nothing fetched"]
@@ -318,7 +319,7 @@ flowchart TB
 
 ### Sequencing
 
-**Step 0 — settle the Fireflies assumptions, before U5 begins.** Using a real workspace key: list a meeting recorded by a different colleague, and run a participant search by name. Record both outcomes in Dependencies and Assumptions. Neither can be settled by the test suite, because every Fireflies test runs against an injected stub — the AE7 scenario goes green whether or not Fireflies supports name matching. Nor can U6's manual verification discriminate: a user-scoped credential passes it if the verifier imports a meeting they recorded themselves.
+**Step 0 — settle the one remaining Fireflies assumption, before U5 begins.** Using the shared account's key, run a participant search by **name** rather than by email address, and record the outcome in Dependencies and Assumptions. The credential-scope half of this step was settled on 2026-07-29 without a key: Biome records everything on one shared account, so there is no cross-user reach to test. What is left cannot be settled by the test suite, because every Fireflies test runs against an injected stub — the AE7 scenario goes green whether or not Fireflies supports name matching. If it turns out to be email-only, R22 and AE7 need restating and the picker needs date-range filtering to compensate, since there is no scoped list to fall back on.
 
 Then U1 — it changes who may write to the whole app, and landing it alone keeps that reviewable in isolation. Only U4 depends on it. U2, U3, U5, and U7 have no dependencies and can proceed in any order; U4 depends on U1 and U3; U6 depends on U5; U8 depends on U7.
 
@@ -342,9 +343,9 @@ Then U1 — it changes who may write to the whole app, and landing it alone keep
 
 | Risk | Treatment |
 |---|---|
-| The Fireflies credential turns out user-scoped, invalidating the shared-connection decision | Sequencing step 0 settles it before U5 begins. Goal Capsule stop condition |
+| ~~The Fireflies credential turns out user-scoped~~ | Settled 2026-07-29: Biome records on one shared account, so there is no per-user scope for it to be limited to |
 | Participant *name* search may be server-side unsupported — every documented filter is address-shaped | Same step. If email-only, name matching covers just the loaded page of 50, and R22 and AE7 need restating — a Product Contract touch |
-| Any signed-in user retrieves any workspace recording's full transcript | Accepted and disclosed (R16). Scoping retrieval was possible and rejected, so R24 makes it attributable instead. The `biome.in` restriction is the only bound on who — KTD11 is not a control |
+| Any signed-in user lists and retrieves any recording Biome has made | Accepted and disclosed (R16), with R24 making it attributable. Scoping is not available to mitigate it — one shared recording account means no per-person filter exists. The `biome.in` restriction is the only bound on who; KTD11 is not a control |
 | A departed user keeps access | Only suspending their Google account removes it; deleting the TARS row lets them sign back in as an author. R23's absolute bound limits the session already issued |
 | The same meeting is imported twice onto one deal | R25 surfaces it, using the source meeting id. The existing unique constraint catches only a repeated call number |
 | An ADMIN demotes the last ADMIN | KTD12 guards it in a Serializable transaction. Recovery, if it ever happened, is an `ADMIN_EMAILS` edit and a re-sign-in |
@@ -466,7 +467,7 @@ Then U1 — it changes who may write to the whole app, and landing it alone keep
   - A response missing participants yields records that still carry title and date.
   - A malformed response fails Zod validation with a typed error rather than propagating undefined.
   - Paging requests use `skip` and never ask for more than the documented `limit` cap of 50.
-  - A participant-scoped list request passes the filter through rather than fetching everything and filtering locally.
+  - A search request passes its filter through to the query rather than fetching everything and filtering locally. (There is no per-person scope filter to test — R11 dropped it.)
   - A credential-less environment surfaces a typed configuration error rather than an unhandled fetch failure.
   - An error response produces a typed error whose message does not contain the credential, and no error path serializes the request or its headers. GraphQL returns errors in a 200 body, so a handler that stringifies the response is a plausible slip.
 - **Verification:** the module's tests pass with no network access and no credential present. They still require Postgres, because `vitest.config.ts` runs one global setup for everything under `lib/`.
@@ -481,7 +482,7 @@ Then U1 — it changes who may write to the whole app, and landing it alone keep
 - **Approach (validate before fetching):** the call-number availability check and the source-meeting-id duplicate check both run **before** the transcript fetch. Otherwise every rejected import still pulls a full workspace recording out of Fireflies and leaves no attributed row behind, since the `Call` that would carry R24 is never written.
 - **Approach (attribution, KTD14):** `Call` gains a nullable importer relation with `onDelete: SetNull`, a nullable importer email beside it, and a nullable source meeting id. `AddCallInput` and `addCall` in `lib/services/capture.ts` are extended with the optional fields so the attributed row is written in **one insert** — threading values through an unchanged `addCall` is a no-op, since it builds its data block from a fixed column set and Zod strips unknown keys, and a follow-up update would leave an unattributed row whenever it failed. In `toCallMeta` the new fields are optional on the record type and spread conditionally, the way `toObservation` already handles `speaker`, so the fixture round-trip in `lib/repo/records.test.ts` still passes.
 - **Approach (error handling):** `toResult` in `lib/actions.ts` rethrows anything it does not recognise, so a Fireflies error would escape as Next's generic render failure. Add the branch alongside the existing extraction one.
-- **Approach (picker states):** five states, none of which the app has a precedent for, since every other control fetches on submit rather than on open — a pending state while the list loads; a no-recordings empty naming the scope; a no-matches empty naming the search term with a way to clear it; a list-failure state rendering the typed Fireflies error with a retry; and an explicit next-page control stating that Fireflies returns 50 at a time. The scope control is a two-option toggle, My meetings / All workspace, defaulting to the former (R11).
+- **Approach (picker states):** five states, none of which the app has a precedent for, since every other control fetches on submit rather than on open — a pending state while the list loads; a no-recordings empty state; a no-matches empty naming the search term with a way to clear it; a list-failure state rendering the typed Fireflies error with a retry; and an explicit next-page control stating that Fireflies returns 50 at a time. There is no scope control: one shared recording account means one list (R11), which is why the search field and R16's disclosure both sit above it rather than beside it.
 - **Approach (credential absent):** the import control is **replaced by a stated-off chip naming the missing credential**, not hidden. The transcript page already argues this for extraction: an absent button is indistinguishable from a broken page.
 - **Patterns to follow:** `components/authoring/AddCallForm.tsx` for the prefilled-but-editable call number, the two-step save-then-extract offer, and the "extraction is off" note. `app/deals/[dealId]/transcript/page.tsx` for reading the credential server-side, passing only an availability boolean, and the stated-off branch. Not `RunExtractionButton.tsx` — it takes no availability prop and does no gating.
 - **Test scenarios:**
@@ -490,7 +491,7 @@ Then U1 — it changes who may write to the whole app, and landing it alone keep
   - Covers AE7. Searching by a participant's name or email finds a meeting whose title does not contain it.
   - An imported call is persisted in one insert with its flattened transcript, the importer id, the importer email, and the source meeting id.
   - A pasted call leaves all three new fields null, and `getRecord` still satisfies the fixture round-trip.
-  - The picker defaults to the signed-in user's own meetings and widens on the control (R11).
+  - The picker lists the shared account's meetings with no scope control, and says so rather than implying a personal list (R11).
   - The picker states that any workspace meeting can be listed **and its full transcript pulled onto a deal** (R16) — not only that the listed meetings belong to the workspace.
   - Each of the five picker states renders its named content.
   - With no Fireflies credential configured, the import control is replaced by a chip naming it, and the paste path still works (R12).
