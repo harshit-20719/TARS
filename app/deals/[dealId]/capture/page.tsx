@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getRecord } from "@/lib/data";
 import { RUBRICS, type ScaleAnchors, type BinaryAnchors } from "@/framework";
 import { scoreMap } from "@/lib/judgment";
+import { candidateEvidenceBySubDimension } from "@/lib/coverage";
 import { ScorePill } from "@/components/ui";
 import { ScoreControl } from "@/components/authoring/ScoreControl";
 import { MacroBlock } from "@/components/authoring/MacroBlock";
@@ -19,14 +20,11 @@ export default async function CapturePage({ params }: { params: Promise<{ dealId
    * observations that speak to the row they are scoring; offering all of a deal's
    * observations on every one of forty-one rows would make the right answer harder
    * to find, not easier. Rejected drafts are left out — the PM already refused them.
+   *
+   * Shared with the floor page, which built the same map, and with coverage, which
+   * needs the rejected ones this drops.
    */
-  const obsBySub = new Map<string, typeof rec.observations>();
-  for (const o of rec.observations) {
-    if (o.status === "rejected") continue;
-    const list = obsBySub.get(o.subDimensionKey);
-    if (list) list.push(o);
-    else obsBySub.set(o.subDimensionKey, [o]);
-  }
+  const obsBySub = candidateEvidenceBySubDimension(rec);
 
   return (
     <div className="page">

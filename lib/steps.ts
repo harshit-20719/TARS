@@ -1,5 +1,6 @@
 import type { DealRecord } from "@/mock/types";
 import { ALL_SUBS, TOTAL_SUBS, PILLARS, TRACKS } from "@/framework";
+import { unevidencedCount } from "./coverage";
 
 /** The floor rows, resolved once — ten of the forty-one carry a floor rule. */
 const FLOOR_SUBS = ALL_SUBS.filter((s) => s.floor);
@@ -45,6 +46,14 @@ export function progressOf(rec: DealRecord) {
     floorScored,
     floorTripped: floorTripped.length,
     killTripped,
+    /**
+     * Rows holding no evidence yet — the sidebar badge, and only that.
+     *
+     * A single pass, deliberately: this function runs inside a per-deal loop on
+     * the deals index, so the three-state per-call grid stays in lib/coverage
+     * rather than making the index pay for data one page reads (KTD5).
+     */
+    unevidenced: unevidencedCount(rec),
     hasTranscript: rec.calls.length > 0,
     hasDrafts: rec.observations.length > 0,
     scorecardReady: slides > 0,

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getRecord } from "@/lib/data";
 import { ALL_SUBS, RUBRICS, type BinaryAnchors, type ScaleAnchors } from "@/framework";
 import { scoreMap } from "@/lib/judgment";
+import { candidateEvidenceBySubDimension } from "@/lib/coverage";
 import { ScorePill } from "@/components/ui";
 import { ScoreControl } from "@/components/authoring/ScoreControl";
 import { Icon } from "@/components/icons";
@@ -55,13 +56,7 @@ export default async function FloorPage({ params }: { params: Promise<{ dealId: 
   const trippedKills = tripped.filter((r) => r.sub.floor!.weight === "kill");
   const unscored = rows.filter((r) => r.unscored);
 
-  const obsBySub = new Map<string, typeof rec.observations>();
-  for (const o of rec.observations) {
-    if (o.status === "rejected") continue;
-    const list = obsBySub.get(o.subDimensionKey);
-    if (list) list.push(o);
-    else obsBySub.set(o.subDimensionKey, [o]);
-  }
+  const obsBySub = candidateEvidenceBySubDimension(rec);
 
   /**
    * Four states, not three.
