@@ -5,6 +5,7 @@ import {
   type Actor,
   assertMayAuthor,
   assertMayDeleteDeal,
+  assertMayManageUsers,
   canAuthorRecord,
   canDeleteDeal,
   canManageUsers,
@@ -55,6 +56,25 @@ describe("user management", () => {
     expect(canManageUsers(Role.PARTNER)).toBe(false);
     expect(canManageUsers(Role.PM)).toBe(false);
     expect(canManageUsers(Role.ADMIN)).toBe(true);
+  });
+
+  /**
+   * With every role authoring, this is the only assertion in the module that
+   * refuses anybody — so it is the one whose direction is worth pinning. A
+   * flipped condition here would open user management to the whole workspace and
+   * break no other test.
+   */
+  it("asserts in the same direction as it reads", () => {
+    expect(() => assertMayManageUsers(actor(Role.ADMIN))).not.toThrow();
+    expect(() => assertMayManageUsers(actor(Role.PM))).toThrow(NotAuthorized);
+    expect(() => assertMayManageUsers(actor(Role.PARTNER))).toThrow(NotAuthorized);
+  });
+
+  it("says which role is required and which one you hold", () => {
+    // The message reaches the person as the action's error, so it has to be
+    // readable rather than a bare "forbidden".
+    expect(() => assertMayManageUsers(actor(Role.PARTNER))).toThrow(/ADMIN/);
+    expect(() => assertMayManageUsers(actor(Role.PARTNER))).toThrow(/PARTNER/);
   });
 });
 

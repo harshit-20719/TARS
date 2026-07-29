@@ -22,7 +22,7 @@
 
 import { connection } from "next/server";
 import * as repo from "@/lib/repo/records";
-import type { Call, Deal, DealRecord } from "@/mock/types";
+import type { Call, Deal, DealRecord, Person } from "@/mock/types";
 
 export async function listDeals(): Promise<Deal[]> {
   await connection();
@@ -49,4 +49,16 @@ export async function getRecord(id: string): Promise<DealRecord | undefined> {
 export async function getCalls(dealId: string): Promise<Call[]> {
   await connection();
   return repo.getCallsWithTranscripts(dealId);
+}
+
+/**
+ * Everyone who holds an account, for the people page (R2).
+ *
+ * The first thing at this seam that is not the deal record. It belongs here for
+ * the same reason the others do: a page that reads it must be request-time, or a
+ * colleague who signed in after the last deploy would not appear on it.
+ */
+export async function listPeople(): Promise<Person[]> {
+  await connection();
+  return repo.listPeople();
 }

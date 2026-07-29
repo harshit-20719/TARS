@@ -16,14 +16,16 @@
 
 import { revalidatePath } from "next/cache";
 import * as z from "zod";
+import { Role } from "@prisma/client";
 import { signOut } from "@/lib/auth";
 import { NotAuthenticated, NotAuthorized } from "@/lib/authz";
-import { requireAuthor } from "@/lib/session";
+import { requireAuthor, requireRole } from "@/lib/session";
 import { RuleViolation } from "@/lib/domain/rules";
 import { CodecError } from "@/lib/domain/codec";
 import { ExtractionError } from "@/lib/extraction/extract";
 import * as capture from "@/lib/services/capture";
 import * as judgment from "@/lib/services/judgment";
+import * as people from "@/lib/services/people";
 import type { ScoreValue } from "@/mock/types";
 
 /**
@@ -255,6 +257,33 @@ export async function setFounderTypeReadAction(raw: unknown): Promise<ActionResu
     await judgment.setFounderTypeRead(actor, raw);
     const dealId = (raw as { dealId?: string })?.dealId;
     if (dealId) revalidateDeal(dealId);
+    return { ok: true };
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+// -------------------------------------------------------------------- people
+
+/**
+ * Change someone's role (R2, R6).
+ *
+ * `requireRole(Role.ADMIN)` and not `requireAuthor`, which every other action in
+ * this module uses. Since U1 authoring is open to all three roles, so
+ * `requireAuthor` refuses nobody signed in — copying the shape above would have
+ * left user management open to a PM. `setRole` asserts the same permission
+ * again, which is why the mistake would not have shown in what a caller sees:
+ * only "the service was never reached" tells the two apart, which is what
+ * lib/actions.test.ts asserts.
+ *
+ * Revalidates the people page rather than the deal paths `revalidateDeal`
+ * covers: no deal changed, and the row whose role moved is on one page only.
+ */
+export async function setRoleAction(userId: string, role: string): Promise<ActionResult> {
+  try {
+    const actor = await requireRole(Role.ADMIN);
+    await people.setRole(actor, { userId, role });
+    revalidatePath("/admin/people");
     return { ok: true };
   } catch (e) {
     return toResult(e);

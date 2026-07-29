@@ -21,6 +21,7 @@ import type {
   DealRecord,
   FounderTypeRead,
   Observation,
+  Person,
   Slide,
   SubDimensionScore,
 } from "@/mock/types";
@@ -266,4 +267,28 @@ export async function getCall(callId: string) {
 export async function getCallsWithTranscripts(dealId: string): Promise<Call[]> {
   const rows = await db.call.findMany({ where: { dealId }, orderBy: { number: "asc" } });
   return rows.map(toCall);
+}
+
+// ------------------------------------------------------------------- people
+
+/**
+ * Everyone who holds an account, oldest first (R2).
+ *
+ * Every row, with no filter: an account that has never signed in still holds a
+ * role, and a colleague who cannot be seen cannot be given one. The password
+ * hash and the session tables are not selected — the page needs identity and
+ * role, and nothing here should be one query away from leaking a credential.
+ */
+export async function listPeople(): Promise<Person[]> {
+  const rows = await db.user.findMany({
+    select: { id: true, name: true, email: true, role: true, createdAt: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: row.role,
+    created: formatRecordDate(row.createdAt),
+  }));
 }

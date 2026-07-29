@@ -35,5 +35,13 @@ export async function requireRole(...allowed: Role[]): Promise<Actor> {
   return actor;
 }
 
-/** Shorthand for the common case: authoring the record. */
+/**
+ * Shorthand for the common case: authoring the record.
+ *
+ * Worth knowing before reaching for it — since U1 `AUTHOR_ROLES` is every role
+ * there is, so this narrows nothing and refuses nobody who is signed in. It
+ * still says what the action needs, and it is the barrier a future read-only
+ * role would land on. But an action that means "an ADMIN only" has to say
+ * `requireRole(Role.ADMIN)`: copying this one would leave it open to everybody.
+ */
 export const requireAuthor = (): Promise<Actor> => requireRole(...AUTHOR_ROLES);

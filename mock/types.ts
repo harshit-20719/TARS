@@ -12,6 +12,8 @@
  * typed config under /framework (plan KTD2), referenced by key.
  */
 
+import type { RoleName } from "@/lib/adminEmails";
+
 export type Layer = "L1" | "L2" | "L3" | "IC";
 
 export type ScoreType = "scale" | "binary";
@@ -141,6 +143,28 @@ export interface FounderTypeRead {
   floorDimension: string;
   /** The PM's one-line confirmation / override. */
   pmConfirmation: string;
+}
+
+/**
+ * Someone who holds an account, as the people page reads them (R2).
+ *
+ * Not part of the deal record — the only shape in here that describes the
+ * workspace rather than a deal. It lives here anyway because the repository
+ * returns plain records and nothing else, and a `User` row carrying Prisma's
+ * `Role` enum and a `Date` would be the first exception to that.
+ *
+ * The role is the union from lib/adminEmails rather than Prisma's enum for the
+ * same reason it is a union there: three literals should not drag the Prisma
+ * client toward anything that renders them.
+ */
+export interface Person {
+  id: string;
+  /** Google supplies one; a dev-credentials or adapter-created row need not. */
+  name: string | null;
+  email: string;
+  /** The role stored on the row — the one `resolveRole` starts from at sign-in. */
+  role: RoleName;
+  created: string;
 }
 
 /** Everything captured for one deal at one layer. The mock exposes one of these. */

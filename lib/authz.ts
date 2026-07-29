@@ -71,6 +71,23 @@ export function assertMayAuthor(actor: Actor): void {
 }
 
 /**
+ * Throw unless this actor may manage people. The one thing role still gates.
+ *
+ * Since U1 every role authors the record, so `assertMayAuthor` narrows nothing —
+ * which leaves this as the only assertion here that refuses anybody. It is
+ * spelled as an `assertMay*` sibling rather than left as the bare predicate
+ * because that is the shape every service reaches for, and a caller writing
+ * `if (!canManageUsers(...))` by hand is a caller who can forget the `!`.
+ */
+export function assertMayManageUsers(actor: Actor): void {
+  if (!canManageUsers(actor.role)) {
+    throw new NotAuthorized(
+      `Managing people is limited to ${Role.ADMIN}; you are signed in as ${actor.role}.`,
+    );
+  }
+}
+
+/**
  * Deleting a whole deal record is a narrower permission than editing one.
  *
  * Authoring is a shared activity — any PM may score any deal, which is what makes
