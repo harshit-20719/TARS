@@ -6,6 +6,19 @@ import { Icon } from "./icons";
 import type { StepView } from "@/lib/steps";
 import type { Deal } from "@/mock/types";
 
+/**
+ * A view's icon, by segment.
+ *
+ * A map rather than the two-way branch this replaced: that one defaulted
+ * everything non-floor to the ledger icon, so the third view would have silently
+ * borrowed the ledger's rather than getting its own.
+ */
+const VIEW_ICONS: Record<string, string> = {
+  floor: "shield",
+  claims: "ledger",
+  coverage: "grid",
+};
+
 export function Sidebar({
   deal,
   steps,
@@ -58,7 +71,7 @@ export function Sidebar({
             return (
               <Link key={v.seg} href={v.href} className="step" aria-current={active ? "page" : undefined}>
                 <span className={`step-dot flat ${v.done ? "done" : ""} ${v.alert ? "bad" : ""}`}>
-                  <Icon name={v.seg === "floor" ? "shield" : "ledger"} className="i sm" />
+                  <Icon name={VIEW_ICONS[v.seg] ?? "ledger"} className="i sm" />
                 </span>
                 <span className="step-name">{v.name}</span>
                 <span className={`step-state ${v.alert ? "bad" : ""}`}>{v.state}</span>
@@ -70,7 +83,9 @@ export function Sidebar({
 
       <div style={{ marginTop: "auto", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
         <span className="authorship">
-          <Icon name="dot" className="i sm" /> machine drafts · <span className="authorship pm">PM scores</span>
+          {/* "PM scores" until U1 — a partner authors on the same terms now (R5),
+              so the line names the split that is actually enforced. */}
+          <Icon name="dot" className="i sm" /> machine drafts · <span className="authorship pm">you score</span>
         </span>
       </div>
     </aside>

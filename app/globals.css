@@ -596,3 +596,35 @@ svg.i.sm { width: 13px; height: 13px; }
 @media (max-width: 640px) {
   .userchip-name { display: none; }
 }
+
+/* ---------- coverage (U8) ---------- */
+.cov-legend { margin-bottom: 14px; font-size: 12px; color: var(--ink-2); list-style: none; padding: 0; }
+.cov-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-card); }
+.cov { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.cov th, .cov td { border-bottom: 1px solid var(--line); padding: 5px 8px; }
+.cov thead th {
+  position: sticky; top: 0; background: var(--surface-2); z-index: 1;
+  font-family: var(--font-data); font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3);
+  text-align: center; white-space: nowrap;
+}
+.cov .cov-rowhead {
+  text-align: left; font-weight: 400; color: var(--ink-2);
+  position: sticky; left: 0; background: var(--surface); min-width: 240px;
+}
+.cov thead .cov-rowhead { background: var(--surface-2); z-index: 2; }
+.cov-group th {
+  text-align: left; background: var(--surface-3); color: var(--ink);
+  font-family: var(--font-data); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase; position: sticky; left: 0;
+}
+/* Borrowed from .cg-cell: same size and type, different state axis. */
+.cov-cell {
+  width: 24px; height: 21px; border-radius: 5px; text-align: center; vertical-align: middle;
+  font-family: var(--font-data); font-size: 10.5px; font-weight: 600;
+}
+.cov td.cov-cell { display: table-cell; }
+.cov-legend .cov-cell { display: inline-grid; place-items: center; margin-right: 2px; }
+.cov-cell.s-has-evidence { background: var(--good-tint); color: var(--good); }
+.cov-cell.s-evidence-rejected { background: var(--bad-tint); color: var(--bad); }
+.cov-cell.s-no-evidence { background: transparent; color: var(--ink-3); border: 1px dashed var(--line); }

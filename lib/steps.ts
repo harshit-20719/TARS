@@ -134,5 +134,18 @@ export function viewsFor(dealId: string, rec: DealRecord): StepView[] {
       done: false,
       state: p.claims > 0 ? `${p.claims}` : "—",
     },
+    {
+      seg: "coverage",
+      name: "Coverage",
+      href: `${base}/coverage`,
+      /**
+       * Never done, whatever the count (R20). Deriving `done` from a zero
+       * unevidenced count would paint a completion tick on a reading the
+       * framework says must never read as a gate — the claim ledger is
+       * registered the same way, for the same reason.
+       */
+      done: false,
+      state: p.unevidenced > 0 ? `${p.unevidenced} unevidenced` : "none unevidenced",
+    },
   ];
 }

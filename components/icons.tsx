@@ -30,11 +30,21 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M5 8h14M9 3v18" />
     </>
   ),
+  /** Coverage — rows against calls, which is exactly what the reading is. */
+  grid: (
+    <>
+      <path d="M4 4h16v16H4z" />
+      <path d="M4 9.5h16M4 15h16M10 4v16" />
+    </>
+  ),
 };
 
 export function Icon({ name, className = "i" }: { name: string; className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+    // data-icon names which glyph rendered. An unknown name yields an empty svg
+    // rather than an error, so without this the only way to tell a missed icon
+    // from a present one is to look at the page.
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true" data-icon={name}>
       {PATHS[name] ?? null}
     </svg>
   );
