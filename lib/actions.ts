@@ -28,7 +28,7 @@ import { ExtractionError } from "@/lib/extraction/extract";
  * Fireflies failure here does not pull the fetch client — and its credential
  * read — into every module that imports an action.
  */
-import { FirefliesError, type FirefliesMeeting } from "@/lib/fireflies/types";
+import { FirefliesError, type MeetingPage } from "@/lib/fireflies/types";
 import * as capture from "@/lib/services/capture";
 import * as importing from "@/lib/services/import";
 import * as judgment from "@/lib/services/judgment";
@@ -219,6 +219,16 @@ export async function runExtractionAction(
  */
 const ListMeetingsRequest = z.object({
   search: z.string().trim().max(200).optional(),
+  /**
+   * `YYYY-MM-DD`, pinned by a pattern rather than left as a free string.
+   *
+   * The value is interpolated into a GraphQL variable of Fireflies' `DateTime`
+   * type, so a malformed one comes back as a query error naming their schema —
+   * a confusing way to learn you typed the date wrong. Refusing it here turns
+   * that into the field-level message the picker already knows how to render.
+   */
+  fromDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.").optional(),
+  toDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.").optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
   skip: z.coerce.number().int().min(0).optional(),
 });
@@ -244,12 +254,18 @@ const ListMeetingsRequest = z.object({
  */
 export async function listFirefliesMeetingsAction(
   raw: unknown = {},
-): Promise<ActionResult<FirefliesMeeting[]>> {
+): Promise<ActionResult<MeetingPage>> {
   try {
     const actor = await requireAuthor();
-    const { search, limit, skip } = ListMeetingsRequest.parse(raw);
-    const meetings = await importing.listFirefliesMeetings(actor, { search, limit, skip });
-    return { ok: true, data: meetings };
+    const { search, fromDate, toDate, limit, skip } = ListMeetingsRequest.parse(raw);
+    const page = await importing.listFirefliesMeetings(actor, {
+      search,
+      fromDate,
+      toDate,
+      limit,
+      skip,
+    });
+    return { ok: true, data: page };
   } catch (e) {
     return toResult(e);
   }

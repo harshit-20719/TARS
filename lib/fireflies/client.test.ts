@@ -58,7 +58,7 @@ const client = (fetch: FirefliesFetch) => createFirefliesClient({ apiKey: KEY, f
 describe("listing the workspace's meetings", () => {
   it("maps a list response to plain records with participants populated", async () => {
     const { fetch } = stub([{ data: { transcripts: [meeting()] } }]);
-    const meetings = await client(fetch).listMeetings();
+    const { meetings } = await client(fetch).listMeetings();
 
     expect(meetings).toEqual([
       {
@@ -80,7 +80,7 @@ describe("listing the workspace's meetings", () => {
     const { fetch } = stub([
       { data: { transcripts: [meeting({ participants: null, duration: null })] } },
     ]);
-    const [m] = await client(fetch).listMeetings();
+    const { meetings: [m] } = await client(fetch).listMeetings();
 
     expect(m.participants).toEqual([]);
     expect(m.title).toBe("Biome <> Halten");
@@ -92,7 +92,7 @@ describe("listing the workspace's meetings", () => {
     const { fetch } = stub([
       { data: { transcripts: [meeting({ id: "m2", date: "2026-07-22T00:00:00.000Z" })] } },
     ]);
-    const [m] = await client(fetch).listMeetings();
+    const { meetings: [m] } = await client(fetch).listMeetings();
     expect(m.date).toBe("2026-07-22T00:00:00.000Z");
   });
 
@@ -145,7 +145,7 @@ describe("search", () => {
 
   it("passes the term to Fireflies rather than filtering the page here", async () => {
     const { fetch, sent } = stub([searchResponse]);
-    const meetings = await client(fetch).listMeetings({ search: "aparna@halten.com" });
+    const { meetings } = await client(fetch).listMeetings({ search: "aparna@halten.com" });
 
     expect(sent).toHaveLength(1);
     expect(sent[0].variables.search).toBe("aparna@halten.com");
@@ -160,7 +160,7 @@ describe("search", () => {
     const { fetch } = stub([
       { data: { byTitle: [meeting({ id: "same" })], byParticipant: [meeting({ id: "same" })] } },
     ]);
-    const meetings = await client(fetch).listMeetings({ search: "halten" });
+    const { meetings } = await client(fetch).listMeetings({ search: "halten" });
     expect(meetings.map((m) => m.id)).toEqual(["same"]);
   });
 
@@ -282,5 +282,158 @@ describe("failures arrive typed", () => {
     vi.stubEnv("FIREFLIES_API_KEY", KEY);
     expect(() => createFirefliesClient()).not.toThrow();
     vi.unstubAllEnvs();
+  });
+});
+
+/**
+ * The date range (R22's other half).
+ *
+ * Search narrows by who and what; this narrows by when. The arguments are built
+ * into the query rather than declared always-present, because a declared-but-null
+ * GraphQL variable is not the same request as an absent argument — and this is
+ * the one part of the query never exercised against a live key.
+ */
+describe("narrowing by when a call was recorded", () => {
+  it("sends neither date argument when neither bound is set", async () => {
+    const { fetch, sent } = stub([{ data: { transcripts: [] } }]);
+    await client(fetch).listMeetings();
+
+    expect(sent[0].query).not.toMatch(/fromDate/);
+    expect(sent[0].query).not.toMatch(/toDate/);
+    expect(sent[0].variables).toEqual({ limit: MAX_PAGE_SIZE, skip: 0 });
+  });
+
+  it("sends only the bound that was set, so one-sided ranges stay one-sided", async () => {
+    const { fetch, sent } = stub([{ data: { transcripts: [] } }]);
+    await client(fetch).listMeetings({ fromDate: "2026-07-01" });
+
+    expect(sent[0].query).toMatch(/\$fromDate: DateTime/);
+    expect(sent[0].query).toMatch(/fromDate: \$fromDate/);
+    // The absent bound must not travel as an explicit null.
+    expect(sent[0].query).not.toMatch(/toDate/);
+    expect(sent[0].variables).toEqual({ limit: MAX_PAGE_SIZE, skip: 0, fromDate: "2026-07-01" });
+  });
+
+  it("sends both bounds, and applies them to a search's two branches alike", async () => {
+    const { fetch, sent } = stub([{ data: { byTitle: [], byParticipant: [] } }]);
+    await client(fetch).listMeetings({
+      search: "aparna",
+      fromDate: "2026-07-01",
+      toDate: "2026-07-31",
+    });
+
+    const byTitle = /byTitle: transcripts\(([^)]*)\)/.exec(sent[0].query)![1];
+    const byParticipant = /byParticipant: transcripts\(([^)]*)\)/.exec(sent[0].query)![1];
+    for (const args of [byTitle, byParticipant]) {
+      expect(args).toMatch(/fromDate: \$fromDate/);
+      expect(args).toMatch(/toDate: \$toDate/);
+    }
+    expect(sent[0].variables.fromDate).toBe("2026-07-01");
+    expect(sent[0].variables.toDate).toBe("2026-07-31");
+  });
+});
+
+/**
+ * Whether more exists is Fireflies' answer, not an inference from the row count.
+ *
+ * A search runs two filtered selections merged and de-duplicated, so a full page
+ * from Fireflies can reach the caller as a short list. Reading that short list as
+ * "the end of the archive" is what hid matches behind a control that had already
+ * disappeared.
+ */
+describe("saying whether there is more", () => {
+  it("reports more when an unfiltered page comes back full", async () => {
+    const rows = Array.from({ length: 3 }, (_, i) => meeting({ id: `m${i}` }));
+    const { fetch } = stub([{ data: { transcripts: rows } }]);
+    const page = await client(fetch).listMeetings({ limit: 3 });
+
+    expect(page.meetings).toHaveLength(3);
+    expect(page.hasMore).toBe(true);
+  });
+
+  it("reports no more when an unfiltered page comes back short", async () => {
+    const { fetch } = stub([{ data: { transcripts: [meeting()] } }]);
+    expect((await client(fetch).listMeetings({ limit: 3 })).hasMore).toBe(false);
+  });
+
+  it("reports more when one search branch is full, even if the merge is short", async () => {
+    // Both branches full and identical: two pages of results that merge to two
+    // rows. The merged count says "short"; the branches say "there is more".
+    const both = [meeting({ id: "a" }), meeting({ id: "b" })];
+    const { fetch } = stub([{ data: { byTitle: both, byParticipant: both } }]);
+    const page = await client(fetch).listMeetings({ search: "halten", limit: 2 });
+
+    expect(page.meetings.map((m) => m.id)).toEqual(["a", "b"]);
+    expect(page.hasMore).toBe(true);
+  });
+
+  it("keeps every unique match instead of trimming the union to one page", async () => {
+    // Two disjoint full branches. Trimming to `limit` used to discard the second
+    // branch's rows — and the caller pages by skip, so they were never asked for
+    // again. Search is the only way to find a call, so a dropped match is lost.
+    const { fetch } = stub([
+      {
+        data: {
+          byTitle: [meeting({ id: "t1" }), meeting({ id: "t2" })],
+          byParticipant: [meeting({ id: "p1" }), meeting({ id: "p2" })],
+        },
+      },
+    ]);
+    const page = await client(fetch).listMeetings({ search: "halten", limit: 2 });
+
+    expect(page.meetings.map((m) => m.id).sort()).toEqual(["p1", "p2", "t1", "t2"]);
+    expect(page.hasMore).toBe(true);
+  });
+});
+
+describe("bounding how long Fireflies may take", () => {
+  it("carries an abort signal on every request", async () => {
+    const { fetch, sent } = stub([{ data: { transcripts: [] } }]);
+    await client(fetch).listMeetings();
+
+    expect(sent[0].signal).toBeInstanceOf(AbortSignal);
+    expect(sent[0].signal!.aborted).toBe(false);
+  });
+
+  it("bounds the transcript fetch too, which is the slow one", async () => {
+    const { fetch, sent } = stub([
+      { data: { transcript: { id: "m1", sentences: [{ speaker_name: "A", text: "hi" }] } } },
+    ]);
+    await client(fetch).fetchTranscript("m1");
+
+    expect(sent[0].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  /**
+   * A timeout is not a dropped connection, and the difference matters to the PM
+   * reading it: one says wait and retry, the other says the network failed. The
+   * function is killed at 60s on Vercel, so an unbounded request returns React's
+   * generic render error with no cause at all — the failure this prevents.
+   */
+  it("names the timeout rather than reporting a failed connection", async () => {
+    const timedOut: FirefliesFetch = async () => {
+      const e = new Error("The operation was aborted due to timeout");
+      e.name = "TimeoutError";
+      throw e;
+    };
+
+    await expect(client(timedOut).listMeetings()).rejects.toThrow(FirefliesError);
+    await expect(client(timedOut).listMeetings()).rejects.toThrow(/did not answer within/i);
+  });
+
+  it("keeps the credential out of a timeout message", async () => {
+    const timedOut: FirefliesFetch = async () => {
+      const e = new Error("aborted");
+      e.name = "TimeoutError";
+      throw e;
+    };
+
+    await expect(client(timedOut).listMeetings()).rejects.toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining(KEY) }),
+    );
+  });
+
+  it("is bounded at the same ceiling the extraction path answers to", () => {
+    expect(FIREFLIES_TIMEOUT_MS).toBe(30_000);
   });
 });

@@ -43,6 +43,35 @@ import type { FirefliesMeeting } from "@/lib/fireflies/types";
  */
 const PAGE_SIZE = 50;
 
+/**
+ * The three ways to narrow the list, carried together.
+ *
+ * One object rather than three pieces of state because they are always applied
+ * as a set: every fetch sends all three, and "what is on screen" is only
+ * meaningful as the whole combination. Keeping them apart invited the bug where
+ * a cleared search still carried the old dates.
+ */
+interface Filter {
+  search: string;
+  /** `YYYY-MM-DD`, which is what a date input produces and what the action takes. */
+  fromDate: string;
+  toDate: string;
+}
+
+const NO_FILTER: Filter = { search: "", fromDate: "", toDate: "" };
+
+const isFiltered = (f: Filter) => f.search !== "" || f.fromDate !== "" || f.toDate !== "";
+
+/** How the applied filter reads back to the PM, for the empty and count states. */
+function describeFilter(f: Filter): string {
+  const parts: string[] = [];
+  if (f.search) parts.push(`“${f.search}”`);
+  if (f.fromDate && f.toDate) parts.push(`between ${f.fromDate} and ${f.toDate}`);
+  else if (f.fromDate) parts.push(`on or after ${f.fromDate}`);
+  else if (f.toDate) parts.push(`on or before ${f.toDate}`);
+  return parts.join(" ");
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /**
@@ -73,68 +102,86 @@ export function ImportFromFireflies({
   const importCall = useAction(importFirefliesCallAction);
 
   const [open, setOpen] = useState(false);
-  /** What is in the search box, which is not yet what the list was fetched with. */
-  const [term, setTerm] = useState("");
-  /** The term the meetings on screen were actually fetched with. */
-  const [searched, setSearched] = useState("");
+  /** What is in the boxes, which is not yet what the list was fetched with. */
+  const [draft, setDraft] = useState<Filter>(NO_FILTER);
+  /** The filter the meetings on screen were actually fetched with. */
+  const [applied, setApplied] = useState<Filter>(NO_FILTER);
   /**
    * What `load` was last called with, set before the request goes out rather
-   * than after it lands — which is exactly how it differs from `searched`.
-   * "Try again" has to retry the fetch that just failed, and `searched` only
+   * than after it lands — which is exactly how it differs from `applied`.
+   * "Try again" has to retry the fetch that just failed, and `applied` only
    * ever names the last one that *succeeded*: retrying against it would take a
    * failed search for "aparna" and silently hand back whatever the unfiltered
    * list (or an earlier term) last was, with no sign the failed term was
    * dropped. Keeping skip here too means a failed next-page load retries that
    * page rather than snapping back to the top of the list.
    */
-  const [attempted, setAttempted] = useState<{ search: string; skip: number }>({ search: "", skip: 0 });
+  const [attempted, setAttempted] = useState<{ filter: Filter; skip: number }>({
+    filter: NO_FILTER,
+    skip: 0,
+  });
   /** Null until the first fetch answers — "not asked yet" is not "nothing there". */
   const [meetings, setMeetings] = useState<FirefliesMeeting[] | null>(null);
-  const [exhausted, setExhausted] = useState(false);
+  /**
+   * What the *next* page should ask Fireflies to skip.
+   *
+   * Tracked rather than derived from `meetings.length`, which is the arithmetic
+   * this replaces. `skip` is applied per branch server-side, and a search runs
+   * two branches merged and de-duplicated — so the rows on screen are never a
+   * count of what either branch consumed. Paging by that count skipped past
+   * meetings nobody ever saw.
+   */
+  const [skip, setSkip] = useState(0);
+  /** Fireflies' own answer, not a guess from the page size. See MeetingPage. */
+  const [hasMore, setHasMore] = useState(false);
   const [picked, setPicked] = useState<FirefliesMeeting | null>(null);
   const [number, setNumber] = useState(String(nextNumber));
   const [label, setLabel] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
-  async function load(search: string, skip: number) {
+  async function load(filter: Filter, atSkip: number) {
     setNote(null);
     // Recorded before the request goes out, not after — see the comment on
     // `attempted` above. Setting it here rather than only on the failure path
     // keeps one place responsible for "what was this call for" instead of
     // duplicating that decision at every call site.
-    setAttempted({ search, skip });
-    const r = await list.run({ search: search.trim() || undefined, skip });
+    setAttempted({ filter, skip: atSkip });
+    const r = await list.run({
+      search: filter.search.trim() || undefined,
+      fromDate: filter.fromDate || undefined,
+      toDate: filter.toDate || undefined,
+      skip: atSkip,
+    });
     if (!r.ok) return;
-    setSearched(search.trim());
+    setApplied({
+      search: filter.search.trim(),
+      fromDate: filter.fromDate,
+      toDate: filter.toDate,
+    });
     // Functional, because a "next page" press resolves against whatever is on
     // screen by then rather than against what was there when it was pressed.
     //
-    // De-duplicated by id when appending (skip > 0). A search runs as two
-    // aliased GraphQL selections — byTitle and byParticipant — merged and
-    // de-duplicated server-side into one page (mergeBranches in
-    // lib/fireflies/client.ts), but only within that page: the comment there
-    // says paging a search "advances both branches together, so a page
-    // boundary ... is approximate," meaning a meeting already on screen can
-    // legitimately come back again on the next page. Appending it unchecked
-    // would render two <li> with the same key={m.id}. What is deliberately
-    // *not* touched here is the paging arithmetic that causes the skew, or
-    // mergeBranches itself: the correct fix for the skew depends on an
-    // unverified assumption (recorded in client.ts) about whether Fireflies
-    // matches participants by name at all, so reshaping paging around that is
-    // deferred until a live key answers it. This is only the narrow half —
-    // stop the duplicate key without changing what gets fetched or when the
-    // list is called exhausted.
+    // De-duplicated by id when appending. A search runs as two aliased GraphQL
+    // selections — byTitle and byParticipant — merged server-side, and paging
+    // advances both branches by the same skip, so a meeting can legitimately
+    // arrive again on a later page. Appending it unchecked would render two
+    // <li> with the same key={m.id}.
     setMeetings((prev) => {
-      if (skip === 0) return r.data;
+      if (atSkip === 0) return r.data.meetings;
       const seen = new Set((prev ?? []).map((m) => m.id));
-      return [...(prev ?? []), ...r.data.filter((m) => !seen.has(m.id))];
+      return [...(prev ?? []), ...r.data.meetings.filter((m) => !seen.has(m.id))];
     });
     /**
-     * A short page is the end of the list. Fireflies reports no total and offers
-     * no cursor, so the alternative is a "next" button that stays lit forever and
-     * answers with nothing.
+     * Advance by the page size, not by how many rows came back.
+     *
+     * A merged search page can hold anything from nothing to twice the page
+     * size, and neither number says how far either branch got — only the skip
+     * that was sent does. And whether more exists is Fireflies' answer, carried
+     * on the page (see MeetingPage), rather than something inferred here from a
+     * short list.
      */
-    setExhausted(r.data.length < PAGE_SIZE);
+    setSkip(atSkip + PAGE_SIZE);
+    setHasMore(r.data.hasMore);
   }
 
   function choose(m: FirefliesMeeting) {
@@ -217,7 +264,7 @@ export function ImportFromFireflies({
             className="btn sm"
             onClick={() => {
               setOpen(true);
-              void load("", 0);
+              void load(NO_FILTER, 0);
             }}
           >
             <Icon name="play" /> Browse meetings
@@ -245,33 +292,65 @@ export function ImportFromFireflies({
             <input
               id="ff-q"
               className="inp"
-              value={term}
+              value={draft.search}
               placeholder="Founder name, email address, or meeting title"
               disabled={list.pending}
-              onChange={(e) => setTerm(e.target.value)}
+              onChange={(e) => setDraft({ ...draft, search: e.target.value })}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void load(term, 0);
+                if (e.key === "Enter") void load(draft, 0);
               }}
             />
-            <button type="button" className="btn sm" disabled={list.pending} onClick={() => void load(term, 0)}>
+            <button type="button" className="btn sm" disabled={list.pending} onClick={() => void load(draft, 0)}>
               Search
             </button>
-            {/* Only while a search has something to clear back from. The
+            {/* Only while something has been applied to clear back from. The
                 no-matches state carries its own way out, and two identical
                 buttons on one panel is a reader working out whether they differ. */}
-            {searched !== "" && meetings !== null && meetings.length > 0 && (
+            {isFiltered(applied) && meetings !== null && meetings.length > 0 && (
               <button
                 type="button"
                 className="ghostbtn"
                 disabled={list.pending}
                 onClick={() => {
-                  setTerm("");
-                  void load("", 0);
+                  setDraft(NO_FILTER);
+                  void load(NO_FILTER, 0);
                 }}
               >
-                Clear search
+                Clear filters
               </button>
             )}
+          </div>
+          {/*
+            The other half of finding a call. Search narrows by who and what; a
+            date range narrows by when, and on one shared account holding every
+            recording the firm has made, "the week we first met them" is often
+            the thing a PM actually remembers. Both bounds are optional and
+            independent — either one alone is a valid filter.
+          */}
+          <div className="ff-search">
+            <label htmlFor="ff-from">Recorded between</label>
+            <input
+              id="ff-from"
+              className="inp narrow"
+              type="date"
+              value={draft.fromDate}
+              disabled={list.pending}
+              max={draft.toDate || undefined}
+              onChange={(e) => setDraft({ ...draft, fromDate: e.target.value })}
+            />
+            <label htmlFor="ff-to">and</label>
+            <input
+              id="ff-to"
+              className="inp narrow"
+              type="date"
+              value={draft.toDate}
+              disabled={list.pending}
+              min={draft.fromDate || undefined}
+              onChange={(e) => setDraft({ ...draft, toDate: e.target.value })}
+            />
+            <button type="button" className="btn sm" disabled={list.pending} onClick={() => void load(draft, 0)}>
+              Apply
+            </button>
           </div>
           {/* Matched by Fireflies against titles and participants, which is what
               makes a meeting findable at all — the titles follow no convention. */}
@@ -289,38 +368,38 @@ export function ImportFromFireflies({
           {!list.pending && list.error && (
             <div className="ff-state">
               <ControlError error={list.error} reauth={list.reauth} />
-              {/* Retries what `load` was last asked for, not `searched` — see the
-                  comment on `attempted` above. `searched` only updates on a
+              {/* Retries what `load` was last asked for, not `applied` — see the
+                  comment on `attempted` above. `applied` only updates on a
                   success, so retrying against it after a failed search would
                   quietly resurrect whatever term (or page) last worked. */}
               <button
                 type="button"
                 className="btn sm"
-                onClick={() => void load(attempted.search, attempted.skip)}
+                onClick={() => void load(attempted.filter, attempted.skip)}
               >
                 Try again
               </button>
             </div>
           )}
 
-          {!list.pending && !list.error && meetings?.length === 0 && searched === "" && (
+          {!list.pending && !list.error && meetings?.length === 0 && !isFiltered(applied) && (
             <div className="empty">
               Fireflies has no recordings on this account yet. Paste the transcript below instead.
             </div>
           )}
 
-          {!list.pending && !list.error && meetings?.length === 0 && searched !== "" && (
+          {!list.pending && !list.error && meetings?.length === 0 && isFiltered(applied) && (
             <div className="empty">
-              No meeting matches “{searched}”.{" "}
+              No meeting matches {describeFilter(applied)}.{" "}
               <button
                 type="button"
                 className="ghostbtn"
                 onClick={() => {
-                  setTerm("");
-                  void load("", 0);
+                  setDraft(NO_FILTER);
+                  void load(NO_FILTER, 0);
                 }}
               >
-                Clear search
+                Clear filters
               </button>
             </div>
           )}
@@ -349,14 +428,14 @@ export function ImportFromFireflies({
               <div className="ff-page">
                 <span className="ctl-note">
                   Fireflies returns 50 meetings at a time — {meetings.length} loaded
-                  {searched !== "" ? ` for “${searched}”` : ""}.
+                  {isFiltered(applied) ? ` matching ${describeFilter(applied)}` : ""}.
                 </span>
-                {!exhausted && (
+                {hasMore && (
                   <button
                     type="button"
                     className="btn sm"
                     disabled={list.pending}
-                    onClick={() => void load(searched, meetings.length)}
+                    onClick={() => void load(applied, skip)}
                   >
                     Load the next 50
                   </button>

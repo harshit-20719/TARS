@@ -34,8 +34,19 @@ type Meeting = {
   durationMinutes: number | null;
 };
 
+/** What the list action hands back: one page, plus Fireflies' own "there is more". */
+type MeetingPage = { meetings: Meeting[]; hasMore: boolean };
+
 const listFirefliesMeetingsAction =
-  vi.fn<(o?: { search?: string; skip?: number; limit?: number }) => Promise<Result<Meeting[]>>>();
+  vi.fn<
+    (o?: {
+      search?: string;
+      fromDate?: string;
+      toDate?: string;
+      skip?: number;
+      limit?: number;
+    }) => Promise<Result<MeetingPage>>
+  >();
 const importFirefliesCallAction =
   vi.fn<(raw: unknown) => Promise<Result<{ callId: string; number: number }>>>();
 const addCallAction = vi.fn<(raw: unknown) => Promise<Result<string>>>(async () => ({
@@ -101,8 +112,11 @@ const type = (labelText: RegExp, value: string) =>
   });
 
 /** Open the picker with the given answer already queued. */
-async function open(meetings: Meeting[] = [FOUNDER_CALL, BOARD_CALL]) {
-  listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: meetings });
+async function open(
+  meetings: Meeting[] = [FOUNDER_CALL, BOARD_CALL],
+  { hasMore = false }: { hasMore?: boolean } = {},
+) {
+  listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings, hasMore } });
   mount();
   await press(/browse meetings/i);
 }
@@ -111,7 +125,7 @@ beforeEach(() => {
   listFirefliesMeetingsAction.mockReset();
   importFirefliesCallAction.mockReset();
   addCallAction.mockClear();
-  listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: [] });
+  listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [], hasMore: false } });
   importFirefliesCallAction.mockResolvedValue({ ok: true, data: { callId: "c1", number: 2 } });
 });
 
@@ -155,16 +169,16 @@ describe("what the picker says about its own reach", () => {
 
 describe("the five states", () => {
   it("shows a pending state while the list loads", async () => {
-    let answer!: (r: Result<Meeting[]>) => void;
+    let answer!: (r: Result<MeetingPage>) => void;
     listFirefliesMeetingsAction.mockImplementationOnce(
-      () => new Promise<Result<Meeting[]>>((resolve) => (answer = resolve)),
+      () => new Promise<Result<MeetingPage>>((resolve) => (answer = resolve)),
     );
     mount();
 
     await press(/browse meetings/i);
     expect(screen.getByText(/reading fireflies/i)).toBeTruthy();
 
-    await act(async () => answer({ ok: true, data: [FOUNDER_CALL] }));
+    await act(async () => answer({ ok: true, data: { meetings: [FOUNDER_CALL], hasMore: false } }));
     expect(screen.queryByText(/reading fireflies/i)).toBeNull();
   });
 
@@ -174,17 +188,17 @@ describe("the five states", () => {
     expect(screen.getByText(/fireflies has no recordings on this account yet/i)).toBeTruthy();
   });
 
-  it("names the search term that matched nothing, and offers a way to clear it", async () => {
+  it("names the filter that matched nothing, and offers a way to clear it", async () => {
     await open([FOUNDER_CALL]);
-    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: [] });
+    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [], hasMore: false } });
 
     await type(/search/i, "aparna");
     await press(/^search$/i);
 
     expect(screen.getByText(/no meeting matches “aparna”/i)).toBeTruthy();
 
-    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: [FOUNDER_CALL] });
-    await press(/clear search/i);
+    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [FOUNDER_CALL], hasMore: false } });
+    await press(/clear filters/i);
     expect(screen.getByText("Biome <> Aparna")).toBeTruthy();
   });
 
@@ -203,7 +217,7 @@ describe("the five states", () => {
 
     expect(screen.getByText(/the FIREFLIES_API_KEY is not valid/)).toBeTruthy();
 
-    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: [FOUNDER_CALL] });
+    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [FOUNDER_CALL], hasMore: false } });
     await press(/try again/i);
     expect(screen.getByText("Biome <> Aparna")).toBeTruthy();
   });
@@ -227,7 +241,7 @@ describe("the five states", () => {
     await press(/^search$/i);
     expect(screen.getByText(/the FIREFLIES_API_KEY is not valid/)).toBeTruthy();
 
-    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: [FOUNDER_CALL] });
+    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [FOUNDER_CALL], hasMore: false } });
     await press(/try again/i);
 
     // Not { search: undefined, skip: 0 } — that would be the blank browse the
@@ -241,11 +255,11 @@ describe("the five states", () => {
    * leave them guessing whether the list they are searching is all of it.
    */
   it("states the page size and asks Fireflies for the next 50", async () => {
-    await open(page(50));
+    await open(page(50), { hasMore: true });
 
     expect(screen.getByText(/fireflies returns 50 meetings at a time/i)).toBeTruthy();
 
-    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: [FOUNDER_CALL] });
+    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [FOUNDER_CALL], hasMore: false } });
     await press(/load the next 50/i);
 
     expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({ search: undefined, skip: 50 });
@@ -263,7 +277,7 @@ describe("the five states", () => {
    * <li> sharing one key={m.id}.
    */
   it("keeps a meeting once when an appended page repeats one already on screen", async () => {
-    await open(page(50));
+    await open(page(50), { hasMore: true });
     expect(screen.getAllByRole("listitem")).toHaveLength(50);
 
     const secondPage: Meeting[] = [
@@ -274,7 +288,7 @@ describe("the five states", () => {
         title: `Meeting ${50 + i}`,
       })),
     ];
-    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: secondPage });
+    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: secondPage, hasMore: false } });
     await press(/load the next 50/i);
 
     // 50 from the first page plus the 49 genuinely new ones from the second —
@@ -300,7 +314,7 @@ describe("identifying the right meeting", () => {
 
   it("searches by whatever the PM types, without pre-filtering it here", async () => {
     await open();
-    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: [FOUNDER_CALL] });
+    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [FOUNDER_CALL], hasMore: false } });
 
     await type(/search/i, "aparna@halten.com");
     await press(/^search$/i);
@@ -317,6 +331,71 @@ describe("identifying the right meeting", () => {
     expect(screen.getByText("Untitled meeting")).toBeTruthy();
     expect(screen.getByText(/no participants recorded/i)).toBeTruthy();
     expect(screen.getByText(/date unknown/i)).toBeTruthy();
+  });
+});
+
+describe("narrowing by when a call was recorded", () => {
+  /**
+   * The other half of finding a call. One shared account holds every recording
+   * the firm has made, and "the week we first met them" is often what a PM
+   * actually remembers — so a date range is the filter search cannot express.
+   */
+  it("sends both bounds to Fireflies, and resets to the first page", async () => {
+    await open([FOUNDER_CALL]);
+
+    await type(/recorded between/i, "2026-07-01");
+    await type(/^and$/i, "2026-07-31");
+    await press(/apply/i);
+
+    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({
+      search: undefined,
+      fromDate: "2026-07-01",
+      toDate: "2026-07-31",
+      skip: 0,
+    });
+  });
+
+  it("combines a date range with a search rather than replacing it", async () => {
+    await open([FOUNDER_CALL]);
+
+    await type(/search/i, "aparna");
+    await type(/recorded between/i, "2026-07-01");
+    await press(/apply/i);
+
+    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({
+      search: "aparna",
+      fromDate: "2026-07-01",
+      toDate: undefined,
+      skip: 0,
+    });
+  });
+
+  it("names the range in the empty state when nothing matched", async () => {
+    await open([FOUNDER_CALL]);
+    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [], hasMore: false } });
+
+    await type(/recorded between/i, "2026-01-01");
+    await type(/^and$/i, "2026-01-31");
+    await press(/apply/i);
+
+    expect(screen.getByText(/between 2026-01-01 and 2026-01-31/i)).toBeTruthy();
+  });
+
+  /** Clearing has to clear the dates too, not just the term. */
+  it("clears the dates along with the search term", async () => {
+    await open([FOUNDER_CALL]);
+
+    await type(/search/i, "aparna");
+    await type(/recorded between/i, "2026-07-01");
+    await press(/apply/i);
+    await press(/clear filters/i);
+
+    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({
+      search: undefined,
+      fromDate: undefined,
+      toDate: undefined,
+      skip: 0,
+    });
   });
 });
 

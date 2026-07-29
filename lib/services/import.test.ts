@@ -65,12 +65,15 @@ function stubFireflies(meetings: FirefliesMeeting[], transcripts: Record<string,
     async listMeetings(options: ListMeetingsOptions = {}) {
       asked.list.push(options);
       const search = options.search?.trim().toLowerCase() ?? "";
-      if (!search) return meetings;
-      return meetings.filter(
-        (m) =>
-          m.title.toLowerCase().includes(search) ||
-          m.participants.some((p) => p.toLowerCase().includes(search)),
-      );
+      if (!search) return { meetings, hasMore: false };
+      return {
+        hasMore: false,
+        meetings: meetings.filter(
+          (m) =>
+            m.title.toLowerCase().includes(search) ||
+            m.participants.some((p) => p.toLowerCase().includes(search)),
+        ),
+      };
     },
     async fetchTranscript(meetingId: string) {
       asked.transcripts.push(meetingId);
@@ -428,7 +431,11 @@ describe("listing the shared account's meetings", () => {
   it("finds a meeting by a participant the title does not mention", async () => {
     const { client, asked } = stubFireflies([MEETING, OTHER_MEETING]);
 
-    const byEmail = await listFirefliesMeetings(pm, { search: "aparna@halten.com" }, { client });
+    const { meetings: byEmail } = await listFirefliesMeetings(
+      pm,
+      { search: "aparna@halten.com" },
+      { client },
+    );
 
     expect(byEmail.map((m) => m.id)).toEqual([MEETING.id]);
     expect(byEmail[0].title).not.toContain("halten");
@@ -440,11 +447,12 @@ describe("listing the shared account's meetings", () => {
   });
 
   /**
-   * The founder's *name* rather than their address. Fireflies matches the term
-   * against the title and the participants, and whether a participant matches by
-   * name is unverified against a live key (see SEARCH_QUERY in
-   * lib/fireflies/client.ts) — so what is pinned here is that the term reaches
-   * Fireflies untouched, which is the half TARS controls.
+   * The founder's *name* rather than their address — AE7's actual shape.
+   *
+   * Settled 2026-07-29 against the shared account's key: Fireflies does match a
+   * participant's name, not only their address. What this pins is the half TARS
+   * controls either way — the term reaches Fireflies untouched rather than being
+   * re-filtered here over a page of 50.
    */
   it("passes a name search through untouched rather than matching it locally", async () => {
     const { client, asked } = stubFireflies([MEETING, OTHER_MEETING]);
@@ -458,7 +466,7 @@ describe("listing the shared account's meetings", () => {
   it("returns the whole workspace when nothing is searched for", async () => {
     const { client } = stubFireflies([MEETING, OTHER_MEETING]);
 
-    const all = await listFirefliesMeetings(pm, {}, { client });
+    const { meetings: all } = await listFirefliesMeetings(pm, {}, { client });
 
     expect(all.map((m) => m.id)).toEqual([MEETING.id, OTHER_MEETING.id]);
   });
@@ -494,5 +502,64 @@ describe("listing the shared account's meetings", () => {
 
     expect(asked.list).toEqual([]);
     expect(asked.transcripts).toEqual([]);
+  });
+});
+
+/**
+ * The constraint behind the duplicate rule.
+ *
+ * `importFirefliesCall` refuses a meeting the deal already holds, but it refuses
+ * it from a read — and between that read and the insert it fetches a transcript
+ * across the network. Two PMs importing the same meeting in that window are each
+ * told it is absent. The pre-check is the message; this is the guarantee.
+ */
+describe("the database's own guard on importing a meeting twice", () => {
+  it("refuses a second call carrying the same meeting on the same deal", async () => {
+    const dealId = await newDeal("Import Constraint Test");
+    const { client } = stubFireflies([MEETING], { [MEETING.id]: "Aparna: We ran a pilot." });
+
+    await importFirefliesCall(pm, { dealId, meetingId: MEETING.id, number: 1, label: "First" }, { client });
+
+    // Straight at the database, bypassing the pre-check entirely — which is the
+    // whole point: this proves the losing racer is stopped even when the read
+    // that normally refuses it has already passed.
+    await expect(
+      db.call.create({
+        data: {
+          dealId,
+          number: 2,
+          label: "Same meeting again",
+          date: new Date(),
+          transcript: "anything",
+          sourceMeetingId: MEETING.id,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "P2002" });
+  });
+
+  it("still lets the same meeting be imported onto a different deal", async () => {
+    const a = await newDeal("Import Constraint Deal A");
+    const b = await newDeal("Import Constraint Deal B");
+    const { client } = stubFireflies([MEETING], { [MEETING.id]: "Aparna: We ran a pilot." });
+
+    await importFirefliesCall(pm, { dealId: a, meetingId: MEETING.id, number: 1, label: "On A" }, { client });
+    await importFirefliesCall(pm, { dealId: b, meetingId: MEETING.id, number: 1, label: "On B" }, { client });
+
+    const onB = await db.call.findFirst({ where: { dealId: b, sourceMeetingId: MEETING.id } });
+    expect(onB).not.toBeNull();
+  });
+
+  /**
+   * Postgres treats NULLs as distinct, which is what keeps the constraint from
+   * catching the pasted calls that make up every deal before importing existed.
+   */
+  it("leaves pasted calls alone, however many a deal has", async () => {
+    const dealId = await newDeal("Import Constraint Paste Test");
+
+    await addCall(pm, { dealId, number: 1, label: "Pasted one", transcript: "a" });
+    await addCall(pm, { dealId, number: 2, label: "Pasted two", transcript: "b" });
+
+    const pasted = await db.call.findMany({ where: { dealId, sourceMeetingId: null } });
+    expect(pasted).toHaveLength(2);
   });
 });

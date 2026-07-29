@@ -34,8 +34,8 @@ import { RuleViolation } from "@/lib/domain/rules";
 import { createFirefliesClient } from "@/lib/fireflies/client";
 import type {
   FirefliesClient,
-  FirefliesMeeting,
   ListMeetingsOptions,
+  MeetingPage,
 } from "@/lib/fireflies/types";
 import { addCall, assertCallNumberFree, isUniqueViolationOn } from "@/lib/services/capture";
 
@@ -83,7 +83,7 @@ export async function listFirefliesMeetings(
   actor: Actor,
   options: ListMeetingsOptions = {},
   deps: FirefliesOptions = {},
-): Promise<FirefliesMeeting[]> {
+): Promise<MeetingPage> {
   assertMayAuthor(actor);
   return resolveClient(deps.client).listMeetings(options);
 }

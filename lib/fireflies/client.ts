@@ -41,6 +41,7 @@ import {
   type FirefliesClient,
   type FirefliesMeeting,
   type ListMeetingsOptions,
+  type MeetingPage,
 } from "./types";
 import type * as z from "zod";
 
@@ -92,9 +93,42 @@ export type FirefliesFetch = (
  */
 const MEETING_FIELDS = "id title date duration participants";
 
-const LIST_QUERY = `query TarsMeetings($limit: Int!, $skip: Int!) {
-  transcripts(limit: $limit, skip: $skip) { ${MEETING_FIELDS} }
+/**
+ * The date bounds, added to a query only when one is actually set.
+ *
+ * Built rather than hardcoded so the unfiltered query stays byte-identical to
+ * the one already proven against the live account. A declared-but-null variable
+ * is not the same request as an absent argument — some servers read the
+ * explicit null as a bound of null rather than as no bound — and this is the
+ * one part of the query that has never been exercised against a real key. The
+ * safe shape is to send nothing when there is nothing to send.
+ */
+function dateClauses(o: { fromDate?: string; toDate?: string }): {
+  decl: string;
+  args: string;
+} {
+  const decl: string[] = [];
+  const args: string[] = [];
+  if (o.fromDate) {
+    decl.push("$fromDate: DateTime");
+    args.push("fromDate: $fromDate");
+  }
+  if (o.toDate) {
+    decl.push("$toDate: DateTime");
+    args.push("toDate: $toDate");
+  }
+  return {
+    decl: decl.length ? `, ${decl.join(", ")}` : "",
+    args: args.length ? `, ${args.join(", ")}` : "",
+  };
+}
+
+function listQuery(o: { fromDate?: string; toDate?: string }): string {
+  const { decl, args } = dateClauses(o);
+  return `query TarsMeetings($limit: Int!, $skip: Int!${decl}) {
+  transcripts(limit: $limit, skip: $skip${args}) { ${MEETING_FIELDS} }
 }`;
+}
 
 /**
  * A search asks the same question twice in one request, because a meeting is
@@ -102,17 +136,21 @@ const LIST_QUERY = `query TarsMeetings($limit: Int!, $skip: Int!) {
  * single argument covering both. The two branches are merged and de-duplicated
  * on the way out.
  *
- * UNVERIFIED against a live key: whether `participant_email` matches a
- * participant's *name* as well as their address. Every documented participant
- * filter on this query is address-shaped, so a name may match nothing here. The
- * term is passed through to Fireflies either way — filtering server-side is the
- * point, since the alternative is fetching the workspace and searching a page of
- * 50 locally. If a real key shows names are unsupported, this is where it shows.
+ * Settled 2026-07-29 against the shared account's key: `participant_email`
+ * matches a participant's **name** as well as their address, which is what AE7
+ * needs — a meeting titled `Biome <> Aparna` is found by searching the founder's
+ * name. The argument is address-shaped in the documentation and turns out not to
+ * be address-only in practice. This matters more than a convenience: R11 dropped
+ * the scoped list, so search is the only way to find a call in an archive of
+ * everything the firm has recorded.
  */
-const SEARCH_QUERY = `query TarsMeetingSearch($limit: Int!, $skip: Int!, $search: String!) {
-  byTitle: transcripts(title: $search, limit: $limit, skip: $skip) { ${MEETING_FIELDS} }
-  byParticipant: transcripts(participant_email: $search, limit: $limit, skip: $skip) { ${MEETING_FIELDS} }
+function searchQuery(o: { fromDate?: string; toDate?: string }): string {
+  const { decl, args } = dateClauses(o);
+  return `query TarsMeetingSearch($limit: Int!, $skip: Int!, $search: String!${decl}) {
+  byTitle: transcripts(title: $search, limit: $limit, skip: $skip${args}) { ${MEETING_FIELDS} }
+  byParticipant: transcripts(participant_email: $search, limit: $limit, skip: $skip${args}) { ${MEETING_FIELDS} }
 }`;
+}
 
 const TRANSCRIPT_QUERY = `query TarsTranscript($id: String!) {
   transcript(id: $id) { id sentences { speaker_name text } }
@@ -270,19 +308,38 @@ export function createFirefliesClient(
     return envelope.data.data;
   }
 
-  async function listMeetings(options: ListMeetingsOptions = {}): Promise<FirefliesMeeting[]> {
+  async function listMeetings(options: ListMeetingsOptions = {}): Promise<MeetingPage> {
     const limit = Math.min(Math.max(1, Math.trunc(options.limit ?? MAX_PAGE_SIZE)), MAX_PAGE_SIZE);
     const skip = Math.max(0, Math.trunc(options.skip ?? 0));
     const search = options.search?.trim() ?? "";
+    const bounds = { fromDate: options.fromDate?.trim(), toDate: options.toDate?.trim() };
+    const vars = {
+      limit,
+      skip,
+      ...(bounds.fromDate ? { fromDate: bounds.fromDate } : {}),
+      ...(bounds.toDate ? { toDate: bounds.toDate } : {}),
+    };
 
     if (!search) {
-      const data = await graphql(LIST_QUERY, { limit, skip });
-      return parseData(MeetingListSchema, data, "meeting list").transcripts.map(toMeeting);
+      const data = await graphql(listQuery(bounds), vars);
+      const rows = parseData(MeetingListSchema, data, "meeting list").transcripts;
+      // One branch, so a full page is the whole of the question.
+      return { meetings: rows.map(toMeeting), hasMore: rows.length === limit };
     }
 
-    const data = await graphql(SEARCH_QUERY, { limit, skip, search });
+    const data = await graphql(searchQuery(bounds), { ...vars, search });
     const { byTitle, byParticipant } = parseData(MeetingSearchSchema, data, "search result");
-    return mergeBranches([...byTitle, ...byParticipant].map(toMeeting), limit);
+    return {
+      meetings: mergeBranches([...byTitle, ...byParticipant].map(toMeeting)),
+      /**
+       * Either branch coming back full means Fireflies still has matches behind
+       * it, whatever the merged count looks like. Reading the merged length
+       * instead is the bug this replaces: two branches returning fifty each,
+       * overlapping heavily, merge to a short list that looks like the end of
+       * the archive while a hundred rows sit unread.
+       */
+      hasMore: byTitle.length === limit || byParticipant.length === limit,
+    };
   }
 
   async function fetchTranscript(meetingId: string): Promise<string> {
@@ -335,15 +392,17 @@ function toIsoDate(date: number | string | null | undefined): string | null {
  * A meeting matching on both its title and its participants comes back twice, so
  * ids are de-duplicated. The order has to be re-established because two merged
  * lists have none: newest first, matching how Fireflies returns an unfiltered
- * page. The cap keeps a searched page the same size as an unsearched one — the
- * cost is that paging a search advances both branches together, so a page
- * boundary with 50 matches on each side is approximate.
+ * page.
+ *
+ * Deliberately **not** capped to the page size. Trimming the union threw away
+ * meetings Fireflies had already found and returned — and the caller pages by
+ * asking for the next `skip`, so a row dropped here was never asked for again.
+ * Handing back up to twice the page size beats silently losing a match in an
+ * archive where search is the only way to find anything.
  */
-function mergeBranches(meetings: FirefliesMeeting[], limit: number): FirefliesMeeting[] {
+function mergeBranches(meetings: FirefliesMeeting[]): FirefliesMeeting[] {
   const byId = new Map<string, FirefliesMeeting>();
   for (const m of meetings) if (!byId.has(m.id)) byId.set(m.id, m);
 
-  return [...byId.values()]
-    .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""))
-    .slice(0, limit);
+  return [...byId.values()].sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
 }

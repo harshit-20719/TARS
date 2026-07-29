@@ -37,11 +37,42 @@ export interface ListMeetingsOptions {
    * shared account, so `host_email` is identical across the workspace and there
    * is no per-person filter to offer (R11). Paging and search are the whole of
    * finding a call.
+   *
+   * Settled 2026-07-29 against the shared account's key: this matches a
+   * participant's **name**, not only their address, so R22 and AE7 hold as
+   * written and a PM can find `Biome <> Aparna` by typing "Aparna".
    */
   search?: string;
+  /**
+   * Inclusive bounds on the recording date, as `YYYY-MM-DD`.
+   *
+   * Search narrows by *who and what*; this narrows by *when*, and the two are
+   * independent — one shared account holding every call the firm has recorded
+   * makes "the week we met them" the other thing a PM actually remembers. Either
+   * bound stands alone: a `from` with no `to` is everything since, and the
+   * reverse is everything up to.
+   */
+  fromDate?: string;
+  toDate?: string;
   /** Capped at MAX_PAGE_SIZE, which is Fireflies' own limit. */
   limit?: number;
   skip?: number;
+}
+
+/**
+ * One page of meetings, and whether asking again could return more.
+ *
+ * `hasMore` is a returned fact rather than something the caller infers from
+ * `meetings.length`, and that distinction is the whole reason this type exists.
+ * A search runs as two filtered selections merged and de-duplicated, so a full
+ * page from Fireflies can arrive here as forty rows — and a caller counting
+ * those rows would conclude the archive was exhausted while a branch still had
+ * fifty more waiting. Only the client can see the per-branch counts that answer
+ * the question, so only the client answers it.
+ */
+export interface MeetingPage {
+  meetings: FirefliesMeeting[];
+  hasMore: boolean;
 }
 
 /**
@@ -49,7 +80,7 @@ export interface ListMeetingsOptions {
  * with no key and reach no network (KTD4).
  */
 export interface FirefliesClient {
-  listMeetings(options?: ListMeetingsOptions): Promise<FirefliesMeeting[]>;
+  listMeetings(options?: ListMeetingsOptions): Promise<MeetingPage>;
   /** The meeting's transcript, flattened to text with its speakers named (R13). */
   fetchTranscript(meetingId: string): Promise<string>;
 }
