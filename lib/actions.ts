@@ -209,6 +209,21 @@ export async function runExtractionAction(
 // ------------------------------------------------------- fireflies import
 
 /**
+ * What the picker may ask the shared account for.
+ *
+ * Declared because a server action's argument is a deserialized browser payload
+ * whatever its TypeScript type says, and this one was the only new action taking
+ * it on trust. The ceilings are the picker's own — 50 is Fireflies' page limit,
+ * and a search term longer than a couple of hundred characters is not a founder's
+ * name — so nothing legitimate is turned away by them.
+ */
+const ListMeetingsRequest = z.object({
+  search: z.string().trim().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  skip: z.coerce.number().int().min(0).optional(),
+});
+
+/**
  * The meetings the picker lists (R11).
  *
  * `requireAuthor` like every other action here, and worth being explicit about
@@ -217,14 +232,23 @@ export async function runExtractionAction(
  * and the whole shared Fireflies account sits behind it, which is why a read
  * gets the same guard the writes have rather than none.
  *
+ * `raw: unknown`, parsed, and then the three fields named individually — the
+ * shape `runExtractionAction` uses for the one option it forwards. Spreading
+ * what arrived was the bug: `listFirefliesMeetings` took its injected Fireflies
+ * client out of the same object, so a `client` key in the payload reached the
+ * service's dependency slot. Parsing strips it, and picking the three fields
+ * means a later option added to the service is not silently settable from a
+ * browser either.
+ *
  * Nothing is revalidated: this reads Fireflies, not the record.
  */
 export async function listFirefliesMeetingsAction(
-  options: { search?: string; limit?: number; skip?: number } = {},
+  raw: unknown = {},
 ): Promise<ActionResult<FirefliesMeeting[]>> {
   try {
     const actor = await requireAuthor();
-    const meetings = await importing.listFirefliesMeetings(actor, options);
+    const { search, limit, skip } = ListMeetingsRequest.parse(raw);
+    const meetings = await importing.listFirefliesMeetings(actor, { search, limit, skip });
     return { ok: true, data: meetings };
   } catch (e) {
     return toResult(e);

@@ -209,6 +209,33 @@ describe("the five states", () => {
   });
 
   /**
+   * `searched` only ever names the search that last *succeeded* — the blank
+   * browse, here — so a retry built from it would silently drop the failed
+   * term and hand back the unfiltered list instead of retrying what was
+   * actually asked for. `attempted` is what "try again" retries instead: set
+   * before the request goes out, so it names the failed call, not the last
+   * one that worked.
+   */
+  it('retries the failed search term on "try again", not the last successful one', async () => {
+    await open([FOUNDER_CALL]); // the initial browse succeeds with search: undefined
+
+    listFirefliesMeetingsAction.mockResolvedValue({
+      ok: false,
+      error: "the FIREFLIES_API_KEY is not valid, so no meetings were read.",
+    });
+    await type(/search/i, "aparna");
+    await press(/^search$/i);
+    expect(screen.getByText(/the FIREFLIES_API_KEY is not valid/)).toBeTruthy();
+
+    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: [FOUNDER_CALL] });
+    await press(/try again/i);
+
+    // Not { search: undefined, skip: 0 } — that would be the blank browse the
+    // list last successfully loaded with, silently dropping "aparna".
+    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({ search: "aparna", skip: 0 });
+  });
+
+  /**
    * Fireflies pages at 50 with no total and no cursor, so "there may be more" is
    * a fact about the API the reader has to be told — a bare "next" button would
    * leave them guessing whether the list they are searching is all of it.
@@ -226,6 +253,34 @@ describe("the five states", () => {
     expect(screen.getAllByRole("listitem")).toHaveLength(51);
     // And a short page is the end of it, so the offer goes away.
     expect(screen.queryByRole("button", { name: /load the next 50/i })).toBeNull();
+  });
+
+  /**
+   * A search runs as two aliased GraphQL selections merged into one page
+   * server-side (mergeBranches, lib/fireflies/client.ts) — but only within
+   * that page. A meeting already on screen can legitimately come back again
+   * on the page after it, and appending pages unchecked would render two
+   * <li> sharing one key={m.id}.
+   */
+  it("keeps a meeting once when an appended page repeats one already on screen", async () => {
+    await open(page(50));
+    expect(screen.getAllByRole("listitem")).toHaveLength(50);
+
+    const secondPage: Meeting[] = [
+      { ...FOUNDER_CALL, id: "ff-0", title: "Meeting 0" }, // already on screen, from page one
+      ...Array.from({ length: 49 }, (_, i) => ({
+        ...FOUNDER_CALL,
+        id: `ff-${50 + i}`,
+        title: `Meeting ${50 + i}`,
+      })),
+    ];
+    listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: secondPage });
+    await press(/load the next 50/i);
+
+    // 50 from the first page plus the 49 genuinely new ones from the second —
+    // not 100 — and the repeated meeting renders once, not twice.
+    expect(screen.getAllByRole("listitem")).toHaveLength(99);
+    expect(screen.getAllByText("Meeting 0")).toHaveLength(1);
   });
 });
 
@@ -342,6 +397,29 @@ describe("importing a chosen meeting", () => {
     await press(/import onto this deal/i);
 
     expect(screen.getByText(/already on this deal as call 2/i)).toBeTruthy();
+  });
+
+  /**
+   * The refusal names the meeting that was picked when it fired ("already on
+   * this deal as call 2") — true of that meeting and nothing else. Left on
+   * screen across a new pick it would still be showing the moment a
+   * different, unrelated meeting is chosen, telling the PM a fresh, valid
+   * choice is a duplicate.
+   */
+  it("clears a refused import's error when a different meeting is picked", async () => {
+    await open();
+    importFirefliesCallAction.mockResolvedValue({
+      ok: false,
+      error: "that Fireflies meeting is already on this deal as call 2",
+      field: "meetingId",
+    });
+
+    await press(/Biome <> Aparna/);
+    await press(/import onto this deal/i);
+    expect(screen.getByText(/already on this deal as call 2/i)).toBeTruthy();
+
+    await press(/Biome board — Q3/);
+    expect(screen.queryByText(/already on this deal as call 2/i)).toBeNull();
   });
 
   it("will not import a meeting with the label emptied", async () => {

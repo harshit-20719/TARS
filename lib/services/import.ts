@@ -9,13 +9,13 @@
  *
  * Three things are load-bearing.
  *
- * **Nothing is fetched until the import is known to be legal.** Both refusals —
- * the call number is taken, the meeting is already here — are settled before the
- * transcript is asked for. Any other order pulls a full recording out of the
- * shared account for an import that then fails, and leaves nothing behind saying
- * who pulled it, because the `Call` row that carries the attribution is never
- * written. Retrieval is the thing being attributed, so an unattributed retrieval
- * is the failure, not an inefficiency.
+ * **Nothing is fetched until the import is known to be legal.** Every refusal —
+ * the meeting is already here, the call number is taken, the deal is gone — is
+ * settled before the transcript is asked for. Any other order pulls a full
+ * recording out of the shared account for an import that then fails, and leaves
+ * nothing behind saying who pulled it, because the `Call` row that carries the
+ * attribution is never written. Retrieval is the thing being attributed, so an
+ * unattributed retrieval is the failure, not an inefficiency.
  *
  * **Choosing is a person's job (R15).** There is no title match, no "looks like
  * this deal", no automatic attach. A meeting reaches a deal because somebody
@@ -37,7 +37,7 @@ import type {
   FirefliesMeeting,
   ListMeetingsOptions,
 } from "@/lib/fireflies/types";
-import { addCall, assertCallNumberFree } from "@/lib/services/capture";
+import { addCall, assertCallNumberFree, isUniqueViolationOn } from "@/lib/services/capture";
 
 export interface FirefliesOptions {
   /** Injected by the tests; constructed from the environment otherwise. */
@@ -70,14 +70,22 @@ function resolveClient(injected?: FirefliesClient): FirefliesClient {
  * rather than a control — the day a read-only role exists, listing the
  * workspace's recordings is not something it should be able to do, and this is
  * where that lands.
+ *
+ * `options` and `deps` are two arguments rather than one intersection, which is
+ * the shape `extractFromTranscript` already uses. They were merged, and that put
+ * the injection slot inside the object a browser fills: `listFirefliesMeetingsAction`
+ * forwards a deserialized payload, so a `client` key smuggled into it landed in
+ * the rest-spread — where a plausible-looking object would have been *used* as
+ * the Fireflies client. What a caller may say and what the process may be handed
+ * are different kinds of thing, and they now arrive through different doors.
  */
 export async function listFirefliesMeetings(
   actor: Actor,
-  options: ListMeetingsOptions & FirefliesOptions = {},
+  options: ListMeetingsOptions = {},
+  deps: FirefliesOptions = {},
 ): Promise<FirefliesMeeting[]> {
   assertMayAuthor(actor);
-  const { client, ...listOptions } = options;
-  return resolveClient(client).listMeetings(listOptions);
+  return resolveClient(deps.client).listMeetings(options);
 }
 
 export const ImportCallInput = z.object({
@@ -101,6 +109,34 @@ export interface ImportedCall {
 }
 
 /**
+ * The refusal the call-number rule cannot cover (AE8).
+ *
+ * Importing the same meeting again as a *free* number is a legal call in every
+ * respect except that the deal already holds this recording, and the PM who is
+ * about to file the same quotes twice is the only one who can decide that. It
+ * names the number it is already on, because "already imported" without saying
+ * where is not something anyone can act on.
+ *
+ * A function rather than four inline lines because it is asked twice: once
+ * before the fetch, and once by whoever loses the race to the unique index that
+ * backs it. Both callers then refuse in the same words by construction, rather
+ * than by two string literals somebody has to keep in step.
+ */
+async function assertMeetingNotOnDeal(dealId: string, meetingId: string): Promise<void> {
+  const already = await db.call.findFirst({
+    where: { dealId, sourceMeetingId: meetingId },
+    select: { number: true },
+    orderBy: { number: "asc" },
+  });
+  if (already) {
+    throw new RuleViolation(
+      `that Fireflies meeting is already on this deal as call ${already.number}`,
+      "meetingId",
+    );
+  }
+}
+
+/**
  * Put one chosen meeting on a deal as a call.
  *
  * The return value is deliberately two identifiers and nothing else. The
@@ -117,29 +153,29 @@ export async function importFirefliesCall(
   assertMayAuthor(actor);
   const input = ImportCallInput.parse(raw);
 
-  /**
-   * Both refusals, before the fetch.
-   *
-   * The duplicate check is the one the call-number rule cannot cover (AE8):
-   * importing the same meeting again as a *free* number is a legal call in every
-   * respect except that the deal already holds this recording, and the PM who is
-   * about to file the same quotes twice is the only one who can decide that.
-   * It names the number it is already on, because "already imported" without
-   * saying where is not something anyone can act on.
-   */
-  const already = await db.call.findFirst({
-    where: { dealId: input.dealId, sourceMeetingId: input.meetingId },
-    select: { number: true },
-    orderBy: { number: "asc" },
-  });
-  if (already) {
-    throw new RuleViolation(
-      `that Fireflies meeting is already on this deal as call ${already.number}`,
-      "meetingId",
-    );
-  }
-
+  /** Every refusal, before the fetch. */
+  await assertMeetingNotOnDeal(input.dealId, input.meetingId);
   await assertCallNumberFree(input.dealId, input.number);
+
+  /**
+   * The third one, which is easy to miss because it is not a rule — it is
+   * `addCall`'s remaining way to fail.
+   *
+   * A deal deleted while the picker was open (or an id that never existed)
+   * reaches the insert as a foreign-key violation, and a foreign-key violation
+   * *after* the fetch is precisely the shape this ordering exists to prevent: a
+   * founder's recording pulled out of the shared account, and then no `Call` row
+   * to say who pulled it. Deletion cascades to the calls, so nothing here can be
+   * salvaged from the wreckage afterwards either. One indexed read closes it.
+   *
+   * The window is genuinely reachable rather than theoretical — deleting a deal
+   * is a normal thing to do to a practice run, and the import dialog holds a
+   * `dealId` from before it.
+   */
+  const deal = await db.deal.findUnique({ where: { id: input.dealId }, select: { id: true } });
+  if (!deal) {
+    throw new RuleViolation("that deal no longer exists, so nothing was imported.", "dealId");
+  }
 
   const transcript = await resolveClient(options.client).fetchTranscript(input.meetingId);
 
@@ -151,15 +187,44 @@ export async function importFirefliesCall(
    * onto the same deal is exactly the situation this feature creates. It costs
    * one indexed read against a unique index that would refuse the write anyway —
    * with a message about a database constraint rather than about call numbers.
+   *
+   * The meeting id travels beside the payload rather than inside it. `addCall`'s
+   * schema takes what a browser may state about a call; this is the one thing
+   * only an importer knows, and keeping it out of the schema is what stops a
+   * pasted call claiming it — see `CallProvenance` in lib/services/capture.ts.
    */
-  const callId = await addCall(actor, {
-    dealId: input.dealId,
-    number: input.number,
-    label: input.label,
-    date: input.date,
-    transcript,
-    sourceMeetingId: input.meetingId,
-  });
-
-  return { callId, number: input.number };
+  try {
+    const callId = await addCall(
+      actor,
+      {
+        dealId: input.dealId,
+        number: input.number,
+        label: input.label,
+        date: input.date,
+        transcript,
+      },
+      { sourceMeetingId: input.meetingId },
+    );
+    return { callId, number: input.number };
+  } catch (e) {
+    /**
+     * The loser of the race the check above cannot win.
+     *
+     * A read decides nothing across a network fetch: two PMs importing the same
+     * meeting onto the same deal both find it absent, both fetch, and
+     * `@@unique([dealId, sourceMeetingId])` refuses the second insert. Asking the
+     * same question again is what turns that into the named refusal — the row
+     * the winner just wrote is the answer, so the wording, the field, and the
+     * call number it points at all come out identical to the pre-flight case
+     * rather than being restated here.
+     *
+     * If the winner has since rolled back there is nothing to name, nothing is
+     * thrown, and the original error goes on up rather than being dressed as a
+     * rule.
+     */
+    if (isUniqueViolationOn(e, "sourceMeetingId")) {
+      await assertMeetingNotOnDeal(input.dealId, input.meetingId);
+    }
+    throw e;
+  }
 }

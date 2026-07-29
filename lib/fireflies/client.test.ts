@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  FIREFLIES_TIMEOUT_MS,
   MAX_PAGE_SIZE,
   createFirefliesClient,
   describeFirefliesFailure,
@@ -14,6 +15,7 @@ type SentRequest = {
   headers: Record<string, string>;
   query: string;
   variables: Record<string, unknown>;
+  signal: AbortSignal | undefined;
 };
 
 /**
@@ -29,7 +31,13 @@ function stub(bodies: unknown[], status = 200) {
       query: string;
       variables: Record<string, unknown>;
     };
-    sent.push({ url, headers: init.headers, query: parsed.query, variables: parsed.variables });
+    sent.push({
+      url,
+      headers: init.headers,
+      query: parsed.query,
+      variables: parsed.variables,
+      signal: init.signal,
+    });
     const body = queue.length > 1 ? queue.shift() : queue[0];
     return { ok: status < 400, status, json: async () => body };
   };

@@ -50,13 +50,39 @@ export const FIREFLIES_API_URL = "https://api.fireflies.ai/graphql";
 export const MAX_PAGE_SIZE = 50;
 
 /**
+ * How long one GraphQL round trip may take before it is abandoned.
+ *
+ * listMeetings and fetchTranscript both run inside a server action invoked from
+ * a page capped at maxDuration = 60 (app/deals/[dealId]/transcript/page.tsx) —
+ * Vercel's free-tier ceiling. Past that limit the function is killed rather than
+ * returning, so no error object ever reaches the handling in lib/actions.ts and
+ * the browser gets React's generic "an error occurred in the Server Components
+ * render" with the real cause stripped. The long comment on BLOCK_TIMEOUT_MS
+ * (lib/extraction/extract.ts) makes the same argument for the same ceiling.
+ * Left alone, a plain fetch has nothing bounding it at all — it waits exactly as
+ * long as Fireflies takes — so a slow response would reintroduce that failure,
+ * and a full transcript fetch is the slowest call this app makes.
+ *
+ * Sized to match BLOCK_TIMEOUT_MS rather than to some Fireflies-specific budget:
+ * both answer to the same sixty-second ceiling, so there is no reason for them
+ * to disagree.
+ */
+export const FIREFLIES_TIMEOUT_MS = 30_000;
+
+/**
  * The slice of fetch this module uses. Narrow on purpose, following the
  * ExtractionClient precedent: a test stub is four lines rather than a mock of
  * Request and Response.
  */
 export type FirefliesFetch = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body: string;
+    /** Carries the FIREFLIES_TIMEOUT_MS ceiling; optional so existing stubs still typecheck. */
+    signal?: AbortSignal;
+  },
 ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
 
 /**
@@ -105,9 +131,22 @@ const TRANSCRIPT_QUERY = `query TarsTranscript($id: String!) {
  * Fireflies' own explanation is passed through because it names the problem.
  * Nothing else from the exchange is: not the query, not the variables, and above
  * all not the headers.
+ *
+ * `status: "timeout"` is deliberately its own case rather than folding into the
+ * `null` branch at the bottom: `null` there means the connection failed outright,
+ * and a PM who waited out FIREFLIES_TIMEOUT_MS did not get a failed connection —
+ * they got no answer in time. Collapsing the two back into one "could not reach
+ * Fireflies" message would erase the one distinction this case exists to draw.
  */
-export function describeFirefliesFailure(status: number | null, messages: string[]): string {
+export function describeFirefliesFailure(
+  status: number | null | "timeout",
+  messages: string[],
+): string {
   const said = messages.length ? ` Fireflies said: ${messages.join("; ")}` : "";
+
+  if (status === "timeout") {
+    return `Fireflies did not answer within ${FIREFLIES_TIMEOUT_MS / 1000} seconds, so nothing was imported.${said}`;
+  }
 
   switch (status) {
     case 400:
@@ -149,6 +188,22 @@ function messageOf(e: unknown): string {
 }
 
 /**
+ * True for what a timed-out fetch throws. `AbortSignal.timeout()` rejects with
+ * a DOMException named "TimeoutError"; an AbortController fired some other way
+ * rejects with "AbortError" — both are checked since either reaching here can
+ * only mean the ceiling in graphql() was hit, this module never accepts an
+ * external signal that could abort for its own reasons.
+ *
+ * Checked by `name` rather than `instanceof DOMException`, matching messageOf
+ * just above: a test stub throwing a plain object shaped like the real thing
+ * should be treated the same as the real thing, and `instanceof` would refuse it.
+ */
+function isTimeout(e: unknown): boolean {
+  const name = (e as { name?: unknown })?.name;
+  return name === "TimeoutError" || name === "AbortError";
+}
+
+/**
  * Validate one operation's payload, and name the field that did not match.
  *
  * The issue paths travel; the body does not. What Fireflies sent is a recording
@@ -183,10 +238,20 @@ export function createFirefliesClient(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ query, variables }),
+        // See FIREFLIES_TIMEOUT_MS just above: bounds this call to the same
+        // ceiling the extraction path next door already answers to.
+        signal: AbortSignal.timeout(FIREFLIES_TIMEOUT_MS),
       });
     } catch (e) {
-      // The only statement in the block is the request, so anything thrown here
-      // is a transport failure. Only what it said travels — not what was sent.
+      if (isTimeout(e)) {
+        // Hitting the ceiling is not the same failure as a dropped connection —
+        // a PM who waited FIREFLIES_TIMEOUT_MS out should be told it timed out,
+        // not that the network failed, so this gets its own status rather than
+        // falling into the generic `null` branch below.
+        throw new FirefliesError(describeFirefliesFailure("timeout", []));
+      }
+      // Anything else thrown here is a transport failure the timeout above did
+      // not cause. Only what it said travels — not what was sent.
       throw new FirefliesError(describeFirefliesFailure(null, [messageOf(e)].filter(Boolean)));
     }
 

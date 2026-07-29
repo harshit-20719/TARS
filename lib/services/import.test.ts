@@ -207,6 +207,80 @@ describe("nothing is fetched until the import is known to be legal", () => {
 
     expect(await db.call.count({ where: { dealId } })).toBe(0);
   });
+
+  /**
+   * The refusal that is not a rule: the deal is gone.
+   *
+   * Deleting a deal is a normal thing to do to a practice run, and the import
+   * dialog holds a `dealId` from before that happened — so this is reachable by
+   * accident rather than only by tampering. Left to the insert it arrives as a
+   * foreign-key violation *after* the fetch, which is the exact failure the
+   * ordering exists to prevent: a founder's recording pulled out of the shared
+   * account, and no `Call` row left to say who pulled it. The empty fetch log is
+   * the assertion that matters here; the message is the ordinary consolation.
+   */
+  it("refuses a deal that no longer exists before fetching", async () => {
+    const { client, asked } = stubFireflies([MEETING], { [MEETING.id]: TRANSCRIPT });
+
+    await expect(
+      importFirefliesCall(
+        pm,
+        { dealId: "deal-deleted-mid-session", meetingId: MEETING.id, number: 1, label: "First" },
+        { client },
+      ),
+    ).rejects.toThrow(RuleViolation);
+
+    expect(asked.transcripts).toEqual([]);
+  });
+
+  /**
+   * The race the pre-flight check cannot win, and what the loser is told.
+   *
+   * The duplicate check is a read and the fetch that follows it crosses a
+   * network, so two PMs importing the same meeting onto the same deal can both
+   * be told it is absent. `@@unique([dealId, sourceMeetingId])` is what actually
+   * refuses the second insert — and a raw constraint error would reach the PM as
+   * React's generic failed render, with the one sentence they could act on
+   * stripped off.
+   *
+   * The other request is simulated by writing during the fetch, which is the
+   * window in question, and directly rather than through the service — the point
+   * is a row appearing behind this import's back, not a second import.
+   */
+  it("tells the loser of a concurrent import what it tells a duplicate", async () => {
+    const dealId = await newDeal("Import Race Test");
+    const { client } = stubFireflies([MEETING], { [MEETING.id]: TRANSCRIPT });
+    const racing: FirefliesClient = {
+      listMeetings: client.listMeetings,
+      async fetchTranscript(meetingId: string) {
+        const text = await client.fetchTranscript(meetingId);
+        await db.call.create({
+          data: {
+            dealId,
+            number: 2,
+            label: "Second founder call",
+            date: new Date(),
+            transcript: text,
+            sourceMeetingId: meetingId,
+            importedById: pm.id,
+            importedByEmail: pm.email,
+          },
+        });
+        return text;
+      },
+    };
+
+    await expect(
+      importFirefliesCall(
+        pm,
+        { dealId, meetingId: MEETING.id, number: 3, label: "Second founder call" },
+        { client: racing },
+      ),
+    ).rejects.toThrow(/already on this deal as call 2/);
+
+    // The winner's row, and only it — the refused insert left nothing behind.
+    expect(await db.call.count({ where: { dealId } })).toBe(1);
+  });
 });
 
 describe("an imported call", () => {
@@ -354,7 +428,7 @@ describe("listing the shared account's meetings", () => {
   it("finds a meeting by a participant the title does not mention", async () => {
     const { client, asked } = stubFireflies([MEETING, OTHER_MEETING]);
 
-    const byEmail = await listFirefliesMeetings(pm, { search: "aparna@halten.com", client });
+    const byEmail = await listFirefliesMeetings(pm, { search: "aparna@halten.com" }, { client });
 
     expect(byEmail.map((m) => m.id)).toEqual([MEETING.id]);
     expect(byEmail[0].title).not.toContain("halten");
@@ -375,7 +449,7 @@ describe("listing the shared account's meetings", () => {
   it("passes a name search through untouched rather than matching it locally", async () => {
     const { client, asked } = stubFireflies([MEETING, OTHER_MEETING]);
 
-    await listFirefliesMeetings(pm, { search: "Aparna Rao", client });
+    await listFirefliesMeetings(pm, { search: "Aparna Rao" }, { client });
 
     expect(asked.list).toEqual([{ search: "Aparna Rao" }]);
   });
@@ -384,7 +458,7 @@ describe("listing the shared account's meetings", () => {
   it("returns the whole workspace when nothing is searched for", async () => {
     const { client } = stubFireflies([MEETING, OTHER_MEETING]);
 
-    const all = await listFirefliesMeetings(pm, { client });
+    const all = await listFirefliesMeetings(pm, {}, { client });
 
     expect(all.map((m) => m.id)).toEqual([MEETING.id, OTHER_MEETING.id]);
   });
@@ -392,7 +466,7 @@ describe("listing the shared account's meetings", () => {
   it("passes paging through, so the picker can ask for the next 50", async () => {
     const { client, asked } = stubFireflies([MEETING]);
 
-    await listFirefliesMeetings(pm, { skip: 50, limit: 50, client });
+    await listFirefliesMeetings(pm, { skip: 50, limit: 50 }, { client });
 
     expect(asked.list).toEqual([{ skip: 50, limit: 50 }]);
   });
@@ -409,7 +483,7 @@ describe("listing the shared account's meetings", () => {
     const { client, asked } = stubFireflies([MEETING]);
     const readOnly: Actor = { ...pm, role: "VIEWER" as Role };
 
-    await expect(listFirefliesMeetings(readOnly, { client })).rejects.toThrow(NotAuthorized);
+    await expect(listFirefliesMeetings(readOnly, {}, { client })).rejects.toThrow(NotAuthorized);
     await expect(
       importFirefliesCall(
         readOnly,

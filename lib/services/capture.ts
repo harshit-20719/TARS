@@ -12,7 +12,13 @@
  */
 
 import * as z from "zod";
-import type { Prisma } from "@prisma/client";
+/**
+ * A value import rather than a type-only one, for `PrismaClientKnownRequestError`
+ * — the one Prisma runtime name a service reaches for, the same way
+ * lib/services/people.ts does. Everything else taken from this namespace here is
+ * still a type.
+ */
+import { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
 import { subByKey } from "@/framework";
@@ -122,16 +128,33 @@ export const AddCallInput = z.object({
   label: z.string().trim().min(1, "Give the call a label."),
   date: z.string().trim().optional(),
   transcript: z.string().trim().min(1, "Paste the transcript."),
-  /**
-   * Set only by the Fireflies import path (lib/services/import.ts), and the one
-   * thing that makes this call an imported one rather than a pasted one.
-   *
-   * The importer's identity is deliberately *not* an input beside it — see the
-   * insert below. Everything a caller may state about where a transcript came
-   * from is here; who did it is taken from the actor.
-   */
-  sourceMeetingId: z.string().trim().min(1).optional(),
+  // Where the transcript came from is deliberately absent — see `CallProvenance`
+  // below, which is a permission boundary rather than a tidiness one.
 });
+
+/**
+ * Where a transcript came from, stated by the only caller in a position to know
+ * — and kept off `AddCallInput` on purpose.
+ *
+ * `addCallAction` hands a browser payload straight to `addCall`, so every field
+ * that schema declares is a field a *pasted* call can state about itself. A
+ * `sourceMeetingId` among them was not a harmless label: the insert below stamps
+ * the actor's name alongside it, so a pasted call could render "Imported from
+ * Fireflies by … · meeting ff-…" over a transcript nobody imported — an
+ * attribution anyone can forge, which is the one thing R24 exists to prevent.
+ * And because the import path answers "is this meeting already here?" from that
+ * column, a pasted call carrying a real meeting id would make the genuine import
+ * of that meeting refuse as already on the deal.
+ *
+ * A second parameter is the fix rather than a stricter schema, because it cannot
+ * be reached from the wire at all: a server action passes one deserialized
+ * argument, and Zod strips a smuggled `sourceMeetingId` out of it exactly as it
+ * already strips a smuggled `importedById`. Only lib/services/import.ts — which
+ * has just pulled the transcript out of that meeting — can fill this in.
+ */
+export interface CallProvenance {
+  sourceMeetingId: string;
+}
 
 /**
  * Whether this deal can take a call on this number — the whole of that rule, so
@@ -178,46 +201,98 @@ export async function assertCallNumberFree(dealId: string, number: number): Prom
   }
 }
 
-export async function addCall(actor: Actor, raw: unknown) {
+/**
+ * Whether a write was refused by a particular unique index — the racing
+ * counterpart of the check above.
+ *
+ * `assertCallNumberFree` is a read, and a read holds nothing: two PMs filing
+ * call 3 on the same deal in the same second both see the number free, and the
+ * database refuses the second write. Unhandled that surfaces as a raw Prisma
+ * error, which `toResult` rethrows on purpose and React then renders as its
+ * generic failed-render — with the message stripped off something the PM could
+ * have fixed by typing a different number.
+ *
+ * Matched on a *field name* rather than on the constraint name because `Call`
+ * carries two unique indexes over `dealId` now, and a catch that could not tell
+ * them apart would report a duplicate meeting as a duplicate call number. Prisma
+ * reports the offending columns in `meta.target`, as an array of field names on
+ * Postgres; other engines and older clients report the constraint name, which
+ * spells out the same fields, so both forms are matched.
+ *
+ * Exported for lib/services/import.ts, which owns the other index's refusal, for
+ * the same reason `assertCallNumberFree` is (AE5): one rule, one wording.
+ */
+export function isUniqueViolationOn(e: unknown, field: string): boolean {
+  if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== "P2002") return false;
+  const target = e.meta?.target;
+  return (Array.isArray(target) ? target.join(",") : String(target ?? "")).includes(field);
+}
+
+/**
+ * Add a call to a deal.
+ *
+ * `provenance` is the third argument rather than a field of `raw` because `raw`
+ * comes off the wire and this does not — see `CallProvenance`. Omitted is the
+ * normal case: a pasted call has no provenance, and passing none is what leaves
+ * the three attribution columns null (R12).
+ */
+export async function addCall(actor: Actor, raw: unknown, provenance?: CallProvenance) {
   assertMayAuthor(actor);
   const input = AddCallInput.parse(raw);
 
   await assertCallNumberFree(input.dealId, input.number);
 
-  const call = await db.call.create({
-    data: {
-      dealId: input.dealId,
-      number: input.number,
-      label: input.label,
-      date: input.date ? parseRecordDate(input.date) : new Date(),
-      transcript: input.transcript,
-      /**
-       * The attribution R24 asks for, written in the same insert as the
-       * transcript (KTD14).
-       *
-       * One insert rather than a follow-up update, because the update is the
-       * failure that matters: a transcript pulled out of the shared Fireflies
-       * account and then saved with nobody's name on it is precisely the row the
-       * attribution exists to prevent, and a second statement is a second chance
-       * to leave one.
-       *
-       * The importer is read off the actor and never off the payload. `addCall`
-       * is reachable from a browser through `addCallAction`, so an
-       * importer-email input would be a field a caller could set to somebody
-       * else — an attribution anyone can forge is not attribution. The source
-       * meeting id is an input because only the caller knows it, and a wrong one
-       * costs nothing beyond a duplicate check that misfires on that row.
-       */
-      ...(input.sourceMeetingId
-        ? {
-            sourceMeetingId: input.sourceMeetingId,
-            importedById: actor.id,
-            importedByEmail: actor.email,
-          }
-        : {}),
-    },
-  });
-  return call.id;
+  try {
+    const call = await db.call.create({
+      data: {
+        dealId: input.dealId,
+        number: input.number,
+        label: input.label,
+        date: input.date ? parseRecordDate(input.date) : new Date(),
+        transcript: input.transcript,
+        /**
+         * The attribution R24 asks for, written in the same insert as the
+         * transcript (KTD14).
+         *
+         * One insert rather than a follow-up update, because the update is the
+         * failure that matters: a transcript pulled out of the shared Fireflies
+         * account and then saved with nobody's name on it is precisely the row
+         * the attribution exists to prevent, and a second statement is a second
+         * chance to leave one.
+         *
+         * All three columns are gated on `provenance` and nothing in `input`.
+         * The importer is read off the actor, so it cannot be set to somebody
+         * else; the meeting id is off the wire entirely, so a pasted call cannot
+         * claim to be an imported one. An attribution anyone can write is not
+         * attribution — see `CallProvenance`.
+         */
+        ...(provenance
+          ? {
+              sourceMeetingId: provenance.sourceMeetingId,
+              importedById: actor.id,
+              importedByEmail: actor.email,
+            }
+          : {}),
+      },
+    });
+    return call.id;
+  } catch (e) {
+    /**
+     * The refusal `assertCallNumberFree` would have given, for the caller that
+     * lost the race to it. Identical wording, because it is the same rule
+     * arriving a few milliseconds later — a PM who hits it should not have to
+     * work out whether "call 3 already exists" and a Prisma constraint name are
+     * the same problem.
+     *
+     * A duplicate *meeting* also lands here and is deliberately not caught:
+     * lib/services/import.ts owns that rule and its message, and this catch
+     * would only be able to name the wrong one.
+     */
+    if (isUniqueViolationOn(e, "number")) {
+      throw new RuleViolation(`call ${input.number} already exists for this deal`, "number");
+    }
+    throw e;
+  }
 }
 
 /**

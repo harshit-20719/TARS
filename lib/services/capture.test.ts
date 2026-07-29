@@ -242,8 +242,14 @@ describe("calls", () => {
    * R24, from the other side. `addCallAction` hands this browser input straight
    * through, so an importer taken from the payload would be an attribution
    * anybody could write — and the point of recording who reached into the shared
-   * Fireflies account is that they cannot. The importer is read off the actor,
-   * and only lib/services/import.ts sets a source meeting at all.
+   * Fireflies account is that they cannot.
+   *
+   * All three columns are smuggled, because the meeting id is the one that made
+   * the other two happen: the insert stamps the actor's name *because* a source
+   * meeting is present, so a payload carrying one alone would have produced a
+   * pasted call that reads "Imported from Fireflies by …". It is out of
+   * `AddCallInput` entirely now and arrives as a separate argument only
+   * lib/services/import.ts passes, so Zod strips it here like the other two.
    *
    * The same argument, and the same shape of test, as the smuggled `ownerId`
    * above.
@@ -256,6 +262,7 @@ describe("calls", () => {
       number: 1,
       label: "First founder call",
       transcript: TRANSCRIPT,
+      sourceMeetingId: "ff-forged-1",
       importedById: partner.id,
       importedByEmail: "someone.else@biome.in",
     });

@@ -216,6 +216,52 @@ describe("the Fireflies actions", () => {
   });
 
   /**
+   * The listing argument is a browser payload, and it used to reach the service
+   * unparsed — into the very parameter the injected Fireflies client was taken
+   * out of. A `client` key in it therefore landed in the service's dependency
+   * slot, which is the one thing a caller must never be able to fill.
+   *
+   * Three smuggled shapes in one press, because the fix is two halves and each
+   * covers a different one: the schema refuses a `limit` far past Fireflies' page
+   * ceiling, and naming the three fields on the way through is what drops
+   * `client` however the schema evolves. What is asserted is the same thing the
+   * guard tests assert — the service was never reached.
+   */
+  it("refuses a malformed listing request without reaching the service", async () => {
+    signInAs(Role.PM);
+
+    const result = await listFirefliesMeetingsAction({
+      client: { listMeetings: async () => [], fetchTranscript: async () => "" },
+      search: { $ne: null },
+      limit: 5000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(listFirefliesMeetings).not.toHaveBeenCalled();
+  });
+
+  /**
+   * And the same key on an otherwise valid request, which is the dangerous one:
+   * nothing here is malformed, so the schema has no reason to refuse the call —
+   * only to strip what it does not declare.
+   */
+  it("drops an injected client from an otherwise valid listing request", async () => {
+    signInAs(Role.PM);
+    const forged = { listMeetings: async () => [], fetchTranscript: async () => "" };
+
+    const result = await listFirefliesMeetingsAction({ search: "aparna@halten.com", client: forged });
+
+    expect(result.ok).toBe(true);
+    expect(listFirefliesMeetings).toHaveBeenCalledWith(
+      expect.objectContaining({ role: Role.PM }),
+      { search: "aparna@halten.com" },
+    );
+    // Not as a third argument either — the dependency slot is not reachable from
+    // a payload at all now that it is a parameter of its own.
+    expect(listFirefliesMeetings.mock.calls[0]).toHaveLength(2);
+  });
+
+  /**
    * A typed Fireflies failure comes back as a value. Without the branch in
    * `toResult` this test throws instead of returning, which is exactly what the
    * PM would see — a page that failed to render, with the reason stripped off.

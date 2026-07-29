@@ -137,15 +137,24 @@ model Call {
   importedByEmail String?
   /// The Fireflies meeting this transcript came from. Also what answers "is this
   /// meeting already on this deal" before anything is fetched (R25).
+  ///
+  /// Unique per deal rather than merely indexed. The service settles that
+  /// question with a read, and a read cannot hold anything across the network
+  /// fetch that follows it — so two PMs importing the same meeting onto the same
+  /// deal at once would each be told it was absent and each write it. The
+  /// call-number rule the same code leans on is a real constraint; this one had
+  /// only the code in front of it. Postgres treats NULLs as distinct, so the many
+  /// pasted calls on a deal are untouched, and the same meeting stays importable
+  /// onto a *different* deal — both are the behaviour R25 asks for.
   sourceMeetingId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([dealId, number])
+  @@unique([dealId, sourceMeetingId])
   @@index([dealId])
   @@index([importedById])
-  @@index([dealId, sourceMeetingId])
 }
 
 /// A verbatim excerpt the machine drafted and the PM ruled on. Never a score.

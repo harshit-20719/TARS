@@ -77,6 +77,17 @@ export function ImportFromFireflies({
   const [term, setTerm] = useState("");
   /** The term the meetings on screen were actually fetched with. */
   const [searched, setSearched] = useState("");
+  /**
+   * What `load` was last called with, set before the request goes out rather
+   * than after it lands — which is exactly how it differs from `searched`.
+   * "Try again" has to retry the fetch that just failed, and `searched` only
+   * ever names the last one that *succeeded*: retrying against it would take a
+   * failed search for "aparna" and silently hand back whatever the unfiltered
+   * list (or an earlier term) last was, with no sign the failed term was
+   * dropped. Keeping skip here too means a failed next-page load retries that
+   * page rather than snapping back to the top of the list.
+   */
+  const [attempted, setAttempted] = useState<{ search: string; skip: number }>({ search: "", skip: 0 });
   /** Null until the first fetch answers — "not asked yet" is not "nothing there". */
   const [meetings, setMeetings] = useState<FirefliesMeeting[] | null>(null);
   const [exhausted, setExhausted] = useState(false);
@@ -87,12 +98,37 @@ export function ImportFromFireflies({
 
   async function load(search: string, skip: number) {
     setNote(null);
+    // Recorded before the request goes out, not after — see the comment on
+    // `attempted` above. Setting it here rather than only on the failure path
+    // keeps one place responsible for "what was this call for" instead of
+    // duplicating that decision at every call site.
+    setAttempted({ search, skip });
     const r = await list.run({ search: search.trim() || undefined, skip });
     if (!r.ok) return;
     setSearched(search.trim());
     // Functional, because a "next page" press resolves against whatever is on
     // screen by then rather than against what was there when it was pressed.
-    setMeetings((prev) => (skip === 0 ? r.data : [...(prev ?? []), ...r.data]));
+    //
+    // De-duplicated by id when appending (skip > 0). A search runs as two
+    // aliased GraphQL selections — byTitle and byParticipant — merged and
+    // de-duplicated server-side into one page (mergeBranches in
+    // lib/fireflies/client.ts), but only within that page: the comment there
+    // says paging a search "advances both branches together, so a page
+    // boundary ... is approximate," meaning a meeting already on screen can
+    // legitimately come back again on the next page. Appending it unchecked
+    // would render two <li> with the same key={m.id}. What is deliberately
+    // *not* touched here is the paging arithmetic that causes the skew, or
+    // mergeBranches itself: the correct fix for the skew depends on an
+    // unverified assumption (recorded in client.ts) about whether Fireflies
+    // matches participants by name at all, so reshaping paging around that is
+    // deferred until a live key answers it. This is only the narrow half —
+    // stop the duplicate key without changing what gets fetched or when the
+    // list is called exhausted.
+    setMeetings((prev) => {
+      if (skip === 0) return r.data;
+      const seen = new Set((prev ?? []).map((m) => m.id));
+      return [...(prev ?? []), ...r.data.filter((m) => !seen.has(m.id))];
+    });
     /**
      * A short page is the end of the list. Fireflies reports no total and offers
      * no cursor, so the alternative is a "next" button that stays lit forever and
@@ -104,6 +140,14 @@ export function ImportFromFireflies({
   function choose(m: FirefliesMeeting) {
     setPicked(m);
     setNote(null);
+    // A refused import names the meeting that caused it — "already on this
+    // deal as call 2" — and that sentence is only true of the meeting that was
+    // picked when it fired. Left on screen across a new pick, it would still
+    // be showing the moment a different, unrelated meeting is chosen: a PM
+    // reading it would take a fresh, valid choice for a duplicate. Cleared the
+    // way ReassignDeal's close() clears `move`'s error on the same kind of
+    // reset — via the hook's own `clearError`, not by hand-rolling one here.
+    importCall.clearError();
     // Prefilled from the meeting and editable, the way the call number is: the
     // title is a decent label and a poor one about equally often.
     setLabel(m.title.trim() || "");
@@ -245,7 +289,15 @@ export function ImportFromFireflies({
           {!list.pending && list.error && (
             <div className="ff-state">
               <ControlError error={list.error} reauth={list.reauth} />
-              <button type="button" className="btn sm" onClick={() => void load(searched, 0)}>
+              {/* Retries what `load` was last asked for, not `searched` — see the
+                  comment on `attempted` above. `searched` only updates on a
+                  success, so retrying against it after a failed search would
+                  quietly resurrect whatever term (or page) last worked. */}
+              <button
+                type="button"
+                className="btn sm"
+                onClick={() => void load(attempted.search, attempted.skip)}
+              >
                 Try again
               </button>
             </div>
@@ -357,7 +409,13 @@ export function ImportFromFireflies({
                   type="button"
                   className="btn"
                   disabled={importCall.pending}
-                  onClick={() => setPicked(null)}
+                  onClick={() => {
+                    setPicked(null);
+                    // Same reason as choose(): stepping back to the list must
+                    // not leave a refusal behind for whatever gets picked next
+                    // to inherit.
+                    importCall.clearError();
+                  }}
                 >
                   Choose a different meeting
                 </button>
