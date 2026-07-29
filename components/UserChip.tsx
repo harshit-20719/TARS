@@ -1,6 +1,7 @@
 "use client";
 
 import { useTransition } from "react";
+import Link from "next/link";
 import { signOutAction } from "@/lib/actions";
 import type { RoleName } from "@/lib/adminEmails";
 
@@ -18,10 +19,17 @@ export function UserChip({
   name,
   email,
   role,
+  canManageUsers = false,
 }: {
   name: string | null;
   email: string;
   role: RoleName;
+  /**
+   * Decided by `lib/authz` on the server and passed as a boolean, rather than
+   * re-derived here from `role`. Restating the rule client-side is how the two
+   * copies drift, and this component has no business knowing what ADMIN means.
+   */
+  canManageUsers?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
 
@@ -35,6 +43,16 @@ export function UserChip({
         {label}
       </span>
       <span className="userchip-role">{role}</span>
+      {/*
+        The people page has no other way in. It is one route, visited rarely, and
+        a link only an ADMIN can see costs less than a page an ADMIN has to
+        remember the URL of.
+      */}
+      {canManageUsers && (
+        <Link className="ghostbtn" href="/admin/people">
+          People
+        </Link>
+      )}
       <button
         type="button"
         className="ghostbtn"

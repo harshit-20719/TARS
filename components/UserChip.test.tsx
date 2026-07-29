@@ -64,3 +64,34 @@ describe("UserChip", () => {
     expect(button.textContent?.trim()).toBeTruthy();
   });
 });
+
+describe("the people link", () => {
+  /**
+   * /admin/people has no other entry point, so without this it is reachable only
+   * by typing the URL — which does not really satisfy R2's "without leaving the
+   * app".
+   */
+  it("offers a way to the people page when the actor may manage users", () => {
+    render(<UserChip name="Harshit" email="harshit@biome.in" role="ADMIN" canManageUsers />);
+    expect(screen.getByRole("link", { name: /people/i }).getAttribute("href")).toBe(
+      "/admin/people",
+    );
+  });
+
+  // The page refuses a non-admin anyway; this keeps it from advertising a door
+  // that will not open.
+  it("shows nothing to someone who may not", () => {
+    render(<UserChip name="Pilot PM" email="pm@biome.in" role="PM" />);
+    expect(screen.queryByRole("link", { name: /people/i })).toBeNull();
+  });
+
+  /**
+   * The decision arrives as a boolean from lib/authz rather than being re-derived
+   * from `role` here. Passing role="ADMIN" without the flag must show nothing,
+   * which is what pins that the rule is not being restated client-side.
+   */
+  it("takes the decision from the server, not from the role string", () => {
+    render(<UserChip name="Harshit" email="harshit@biome.in" role="ADMIN" />);
+    expect(screen.queryByRole("link", { name: /people/i })).toBeNull();
+  });
+});

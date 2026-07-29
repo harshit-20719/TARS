@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { canManageUsers } from "@/lib/authz";
 import { currentActor } from "@/lib/session";
 import { ThemeToggle } from "./ThemeToggle";
 import { UserChip } from "./UserChip";
@@ -22,7 +23,14 @@ export async function TopBar() {
         <span className="brand-sub">Conviction · L1</span>
       </Link>
       <div className="topbar-spacer" />
-      {actor && <UserChip name={actor.name} email={actor.email} role={actor.role} />}
+      {actor && (
+        <UserChip
+          name={actor.name}
+          email={actor.email}
+          role={actor.role}
+          canManageUsers={canManageUsers(actor.role)}
+        />
+      )}
       <ThemeToggle />
     </header>
   );
