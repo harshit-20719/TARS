@@ -74,28 +74,51 @@ export function thinkingConfigFor(model: string): Record<string, unknown> {
   // An id this does not recognise is far likelier to be newer than older, so the
   // unknown case takes the modern shape.
   const adaptive = !parsed || major >= 5 || (major === 4 && minor >= 6);
+
+  /**
+   * Thinking is off unless asked for, and that default was earned rather than
+   * assumed: with it on, five of the six blocks on a real forty-minute
+   * transcript did not finish inside thirty seconds.
+   *
+   * Two reasons it costs more here than it looks. `max_tokens` caps thinking and
+   * output *together*, so on a block that legitimately produces a few thousand
+   * tokens of quotes the thinking is competing with the drafts for the same
+   * budget. And the work itself does not need it: the prompt asks the model to
+   * quote exactly, file the quote against one of six or seven rows, and tag
+   * where it came from. That is a careful-reading task, not a reasoning one.
+   *
+   * What makes it safe is that none of the guards depend on it. A paraphrase is
+   * dropped by the verbatim check whether the model thought about it or not, the
+   * schema constrains the shape, and a mapping the model is unsure of reports
+   * itself and goes to a person. So the failure modes thinking would protect
+   * against are already caught downstream.
+   *
+   * EXTRACTION_THINKING=on restores it, per generation, without a code change —
+   * worth trying on short transcripts if the filing quality needs it.
+   */
+  const wantThinking = process.env.EXTRACTION_THINKING?.trim() === "on";
+
   if (adaptive) {
     /**
-     * Effort is the latency lever, and latency is the binding constraint here:
-     * the whole extraction has to finish inside one serverless function call
-     * (60 seconds on Vercel's free tier), and a forty-minute transcript is not a
-     * small read. "low" is the default because this is a careful-reading task
-     * rather than a reasoning one — quote exactly, map to a row, tag an origin —
-     * and a run that gets killed at the ceiling produces nothing at all, which
-     * is worse than a run that thinks a little less.
-     *
-     * Raise it with EXTRACTION_EFFORT if the mapping quality needs it and the
-     * transcripts are short enough to afford it.
+     * Effort still applies with thinking off — it governs the model's overall
+     * token spend, not only how deeply it thinks. "low" for the same reason as
+     * above; EXTRACTION_EFFORT raises it.
      */
     const effort = process.env.EXTRACTION_EFFORT?.trim() || "low";
-    return { thinking: { type: "adaptive" }, effort };
+    return {
+      thinking: wantThinking ? { type: "adaptive" } : { type: "disabled" },
+      effort,
+    };
   }
   /**
-   * Pre-4.6: a fixed budget, which must be strictly less than max_tokens. 4000
-   * is enough for the model to work through a transcript without eating the
+   * Pre-4.6, and still no `effort` — Haiku 4.5 rejects it outright, which is the
+   * whole reason this function exists. A fixed budget must be strictly less than
+   * max_tokens; 4000 is enough to work through a transcript without eating the
    * budget the drafts themselves need.
    */
-  return { thinking: { type: "enabled", budget_tokens: 4000 } };
+  return {
+    thinking: wantThinking ? { type: "enabled", budget_tokens: 4000 } : { type: "disabled" },
+  };
 }
 
 export class ExtractionError extends Error {
@@ -154,6 +177,20 @@ export function describeApiFailure(e: unknown): string {
   if (typeof err?.status === "number" && err.status >= 500) {
     return `the API is unavailable right now — the transcript is saved, so try again.${ref}`;
   }
+  /**
+   * A timeout is not "could not reach the API" and should not read as one. It
+   * means the model was answering and had not finished — a different problem
+   * with different levers, and the message names them rather than leaving the PM
+   * to guess at a network fault that is not happening.
+   */
+  const name = (e as { name?: string })?.name ?? "";
+  if (name === "APIConnectionTimeoutError" || /timed out/i.test(err?.message ?? "")) {
+    return (
+      `the model did not finish this block within ${Math.round(BLOCK_TIMEOUT_MS / 1000)} seconds, ` +
+      `so nothing was written for it. The other blocks are unaffected — re-run to try this one again. ` +
+      `If it keeps happening the transcript is long enough to need a faster model (EXTRACTION_MODEL).`
+    );
+  }
   // No status: a connection failure, or something the SDK threw before sending.
   const raw = err?.message ? ` ${err.message}` : "";
   return `could not reach the API, so no drafts were written.${raw}`;
@@ -180,8 +217,20 @@ export function describeApiFailure(e: unknown): string {
  * That last paragraph was false until BLOCK_RETRIES existed, and the way it was
  * false is worth keeping written down: this option bounds one *attempt*, not one
  * block. See BLOCK_RETRIES.
+ *
+ * Forty rather than thirty because thirty was not enough: on a real forty-minute
+ * transcript five of the six blocks did not finish in time. Forty plus the write
+ * phase's ten is fifty, which leaves a cold start and the session lookup room
+ * inside sixty.
+ *
+ * Note what will *not* buy a block more time, because it is the obvious next
+ * idea: splitting the six blocks across six requests. The blocks already run
+ * concurrently, so they share wall clock rather than dividing a budget — one
+ * block in its own function still cannot exceed the same sixty-second ceiling
+ * minus the same write phase. The levers that do work are this number and the
+ * model's own speed (see thinkingConfigFor, EXTRACTION_MODEL).
  */
-export const BLOCK_TIMEOUT_MS = 30_000;
+export const BLOCK_TIMEOUT_MS = 40_000;
 
 /**
  * No retries, which is the only setting that makes BLOCK_TIMEOUT_MS mean what

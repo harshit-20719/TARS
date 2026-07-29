@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BLOCK_TIMEOUT_MS,
   DEFAULT_EXTRACTION_MODEL,
@@ -298,13 +298,19 @@ describe("extractFromTranscript", () => {
     ).rejects.toThrow(/ANTHROPIC_API_KEY is not valid/);
   });
 
-  it("keeps thinking on, at the effort the latency budget allows", async () => {
+  /**
+   * Renamed rather than deleted: it used to assert thinking stayed on, and the
+   * latency budget is exactly why that changed. `max_tokens` caps thinking and
+   * output together, so on a long transcript the thinking was competing with the
+   * drafts — and five of six blocks missed the deadline.
+   */
+  it("turns thinking off, at the effort the latency budget allows", async () => {
     const { client, calls } = stub(output());
     await extractFromTranscript(
       { transcript: TRANSCRIPT, callNumber: 1 },
       { client, blocks: [ONE_BLOCK] },
     );
-    expect(calls[0].thinking).toEqual({ type: "adaptive" });
+    expect(calls[0].thinking).toEqual({ type: "disabled" });
     expect((calls[0].output_config as { effort: string }).effort).toBe("low");
   });
 
@@ -444,32 +450,61 @@ describe("the output schema", () => {
 });
 
 describe("thinking config per model generation", () => {
-  it("asks 4.6-and-later models for adaptive thinking at an effort level", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  /**
+   * Off by default, because with it on five of the six blocks on a real
+   * forty-minute transcript did not finish inside the block timeout. `max_tokens`
+   * caps thinking and output together, so on this task thinking competes with the
+   * drafts for the same budget.
+   */
+  it.each([
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+    "claude-sonnet-4-5",
+  ])("asks %s not to think", (model) => {
+    expect(thinkingConfigFor(model).thinking, model).toEqual({ type: "disabled" });
+  });
+
+  it("still sets an effort level on 4.6-and-later, which applies with thinking off", () => {
     for (const model of ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-4-6"]) {
       expect(thinkingConfigFor(model), model).toEqual({
-        thinking: { type: "adaptive" },
+        thinking: { type: "disabled" },
         effort: "low",
       });
     }
   });
 
   /**
-   * The case that made this function necessary. Haiku 4.5 rejects `effort`
-   * outright and does not accept adaptive thinking — so pasting EXTRACTION_MODEL
-   * straight into the request would 400, not merely run worse. It is also the
-   * model someone reaches for precisely to make this step cheaper.
+   * The case that made this function necessary, and the half of it that has
+   * nothing to do with thinking: Haiku 4.5 rejects `effort` outright, so pasting
+   * EXTRACTION_MODEL straight into the request would 400 rather than merely run
+   * worse. It is also the model someone reaches for precisely to make this step
+   * cheaper — which the timeouts now make tempting.
    */
   it.each(["claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-sonnet-4-5", "claude-opus-4-1"])(
-    "gives %s a fixed budget and no effort level",
+    "gives %s no effort level, whatever the thinking setting",
     (model) => {
-      const config = thinkingConfigFor(model);
-      expect(config).toEqual({ thinking: { type: "enabled", budget_tokens: 4000 } });
-      expect(config.effort).toBeUndefined();
+      expect(thinkingConfigFor(model).effort).toBeUndefined();
+      vi.stubEnv("EXTRACTION_THINKING", "on");
+      expect(thinkingConfigFor(model).effort).toBeUndefined();
     },
   );
 
+  /**
+   * The bug this function was written to make impossible. Read on `effort`
+   * rather than on `thinking`, because with thinking off by default both
+   * generations return the same thinking shape — `effort` is what still
+   * separates them, and it is the field that actually 400s.
+   */
   it("does not read the 5 in a 4-5 id as the 5 series", () => {
-    // The bug this function was written to make impossible.
+    expect(thinkingConfigFor("claude-haiku-4-5").effort).toBeUndefined();
+    expect(thinkingConfigFor("claude-opus-5").effort).toBe("low");
+
+    vi.stubEnv("EXTRACTION_THINKING", "on");
     expect(thinkingConfigFor("claude-haiku-4-5").thinking).not.toEqual({ type: "adaptive" });
     expect(thinkingConfigFor("claude-opus-5").thinking).toEqual({ type: "adaptive" });
   });
@@ -479,13 +514,23 @@ describe("thinking config per model generation", () => {
   });
 
   it("lets EXTRACTION_EFFORT raise the level without a code change", () => {
-    // The escape hatch for short transcripts that can afford more thinking.
+    // The escape hatch for short transcripts that can afford more.
     vi.stubEnv("EXTRACTION_EFFORT", "high");
     expect(thinkingConfigFor("claude-sonnet-5").effort).toBe("high");
-    vi.unstubAllEnvs();
+  });
+
+  /** The other escape hatch: thinking back on, per generation, no code change. */
+  it("lets EXTRACTION_THINKING put thinking back, in the shape each generation takes", () => {
+    vi.stubEnv("EXTRACTION_THINKING", "on");
+    expect(thinkingConfigFor("claude-sonnet-5").thinking).toEqual({ type: "adaptive" });
+    expect(thinkingConfigFor("claude-haiku-4-5").thinking).toEqual({
+      type: "enabled",
+      budget_tokens: 4000,
+    });
   });
 
   it("keeps the pre-4.6 budget below max_tokens, which the API requires", () => {
+    vi.stubEnv("EXTRACTION_THINKING", "on");
     const budget = (thinkingConfigFor("claude-haiku-4-5").thinking as { budget_tokens: number })
       .budget_tokens;
     // max_tokens is sized for one block now, not for the whole rubric.
@@ -507,14 +552,35 @@ describe("thinking config per model generation", () => {
     const haiku = await run("claude-haiku-4-5");
     const opus = await run("claude-opus-5");
 
-    expect(haiku.thinking).toEqual({ type: "enabled", budget_tokens: 4000 });
+    // Thinking off by default on both, in the one shape every generation accepts.
+    expect(haiku.thinking).toEqual({ type: "disabled" });
+    expect(opus.thinking).toEqual({ type: "disabled" });
+    // The 400-avoidance, which is what this test is really for: effort reaches the
+    // 5-series request and never reaches Haiku's.
     expect((haiku.output_config as Record<string, unknown>).effort).toBeUndefined();
-    expect(opus.thinking).toEqual({ type: "adaptive" });
     expect((opus.output_config as Record<string, unknown>).effort).toBe("low");
     // The schema travels either way — the authorship rule is not model-dependent.
     for (const params of [haiku, opus]) {
       expect((params.output_config as Record<string, unknown>).format).toBeTruthy();
     }
+  });
+
+  it("sends each generation's own thinking shape when EXTRACTION_THINKING is on", async () => {
+    vi.stubEnv("EXTRACTION_THINKING", "on");
+    const run = async (model: string) => {
+      const { client, calls } = stub(output());
+      await extractFromTranscript(
+        { transcript: TRANSCRIPT, callNumber: 1 },
+        { client, model, blocks: [ONE_BLOCK] },
+      );
+      return calls[0];
+    };
+
+    expect((await run("claude-haiku-4-5")).thinking).toEqual({
+      type: "enabled",
+      budget_tokens: 4000,
+    });
+    expect((await run("claude-opus-5")).thinking).toEqual({ type: "adaptive" });
   });
 });
 
