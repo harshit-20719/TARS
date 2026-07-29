@@ -5,6 +5,7 @@ import type { Observation } from "@/mock/types";
 import { RUBRICS } from "@/framework";
 import { decideObservationAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
+import { ControlError } from "../ControlError";
 
 /**
  * The evidence cited by one score, with the two corrections worth making in place.
@@ -133,7 +134,7 @@ export function EvidenceList({
           )}
         </div>
       ))}
-      {decide.error && <div className="ctl-err">{decide.error}</div>}
+      <ControlError error={decide.error} reauth={decide.reauth} />
     </div>
   );
 }

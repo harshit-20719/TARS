@@ -6,6 +6,7 @@ import type { DealRecord } from "@/mock/types";
 import { deleteDealAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
 import { Icon } from "@/components/icons";
+import { ControlError } from "../ControlError";
 
 /**
  * Delete a deal record, with a confirmation you cannot click through.
@@ -102,7 +103,7 @@ export function DeleteDeal({ record }: { record: DealRecord }) {
             A PM can delete a deal they opened; an ADMIN can delete any.
           </span>
         </div>
-        {del.error && <div className="ctl-err">{del.error}</div>}
+        <ControlError error={del.error} reauth={del.reauth} />
       </div>
     </div>
   );

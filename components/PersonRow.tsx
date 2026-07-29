@@ -2,6 +2,7 @@
 
 import { setRoleAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
+import { ControlError } from "./ControlError";
 import type { RoleName } from "@/lib/adminEmails";
 import type { Person } from "@/mock/types";
 
@@ -130,7 +131,7 @@ export function PersonRow({
           a permission.
         */}
         {setRole.pending && <span className="ctl-saving">saving…</span>}
-        {setRole.error && <div className="ctl-err">{setRole.error}</div>}
+        <ControlError error={setRole.error} reauth={setRole.reauth} />
       </td>
 
       <td aria-label={`At next sign-in ${roleAtNextSignIn}`}>

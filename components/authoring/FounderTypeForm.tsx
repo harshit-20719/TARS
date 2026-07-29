@@ -5,6 +5,7 @@ import type { FounderTypeRead } from "@/mock/types";
 import { FOUNDER_TYPES, RUBRICS, founderTypeByLabel } from "@/framework";
 import { setFounderTypeReadAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
+import { ControlError } from "../ControlError";
 
 /**
  * The founder-type read: context, not a verdict.
@@ -152,7 +153,7 @@ export function FounderTypeForm({
         {!save.pending && !dirty && read.primary && <span className="ctl-note">saved</span>}
       </div>
 
-      {save.error && <div className="ctl-err">{save.error}</div>}
+      <ControlError error={save.error} reauth={save.reauth} />
     </div>
   );
 }

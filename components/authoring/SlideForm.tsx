@@ -6,6 +6,7 @@ import type { Pillar, Track } from "@/framework";
 import { L1_CAP } from "@/framework";
 import { clearSlideAction, setSlideAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
+import { ControlError } from "../ControlError";
 
 /**
  * Author one 0–10 pillar or track slide.
@@ -207,7 +208,7 @@ export function SlideForm({
         )}
       </div>
 
-      {error && <div className="ctl-err" style={{ marginTop: 4 }}>{error}</div>}
+      <ControlError error={error} reauth={save.reauth || clear.reauth} style={{ marginTop: 4 }} />
     </div>
   );
 }

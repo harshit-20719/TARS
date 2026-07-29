@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { deleteCallAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
+import { ControlError } from "../ControlError";
 
 /**
  * Remove one call's transcript — the fix for a paste that went wrong.
@@ -52,7 +53,7 @@ export function DeleteCall({
           ? `The ${draftedCount} observation${draftedCount === 1 ? "" : "s"} filed from this call stay — they are keyed by call number, not by the transcript.`
           : "Nothing was filed from this call."}
       </span>
-      {del.error && <span className="ctl-err">{del.error}</span>}
+      <ControlError error={del.error} reauth={del.reauth} as="span" />
     </>
   );
 }

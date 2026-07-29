@@ -5,6 +5,7 @@ import type { Observation } from "@/mock/types";
 import { RUBRICS, subByKey } from "@/framework";
 import { decideObservationAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
+import { ControlError } from "./ControlError";
 
 /**
  * The exception queue: the mappings the machine was not sure about.
@@ -95,7 +96,7 @@ export function ReviewBoard({
       <div className="sc-block-title" style={{ marginTop: 0 }}>
         Unsure of the row · {queue.length}
       </div>
-      {decide.error && <div className="ctl-err" style={{ marginBottom: 10 }}>{decide.error}</div>}
+      <ControlError error={decide.error} reauth={decide.reauth} style={{ marginBottom: 10 }} />
       {groups.map((g) => (
         <div key={g.r.key}>
           <div className="rg-head">

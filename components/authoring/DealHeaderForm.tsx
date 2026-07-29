@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { Deal } from "@/mock/types";
 import { updateDealAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
+import { ControlError } from "../ControlError";
 
 /**
  * Correct a deal's own details after it was opened.
@@ -68,7 +69,7 @@ export function DealHeaderForm({ deal }: { deal: Deal }) {
             {save.pending ? "Saving…" : "Save"}
           </button>
         </div>
-        {save.error && <div className="ctl-err">{save.error}</div>}
+        <ControlError error={save.error} reauth={save.reauth} />
       </div>
     </div>
   );

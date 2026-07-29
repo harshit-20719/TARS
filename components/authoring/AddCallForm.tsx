@@ -4,6 +4,7 @@ import { useState } from "react";
 import { addCallAction, runExtractionAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
 import { Icon } from "@/components/icons";
+import { ControlError } from "../ControlError";
 
 /**
  * Paste a transcript, and optionally run extraction on it in the same step.
@@ -130,9 +131,10 @@ export function AddCallForm({
             </span>
           )}
         </div>
-        {(addCall.error || extract.error) && (
-          <div className="ctl-err">{addCall.error ?? extract.error}</div>
-        )}
+        <ControlError
+          error={addCall.error ?? extract.error}
+          reauth={addCall.reauth || extract.reauth}
+        />
         {note && !addCall.error && !extract.error && (
           <div className="callout neutral" style={{ marginBottom: 0 }}>
             <span className="co-badge">done</span>

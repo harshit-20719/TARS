@@ -25,14 +25,17 @@ import type { ActionResult } from "./actions";
 /**
  * What a control shows when the session ended underneath it (R23, AE10).
  *
- * Handled here rather than in each control so every save in the app gets it
- * from one place. The bare `NotAuthenticated` message ("Sign in to continue.")
- * reads as a permission complaint mid-scoring; this says what actually happened
- * and what to do about it. Reloading is the way back: middleware sends any
- * navigation without a session to the sign-in page.
+ * Handled here rather than in each control so every save in the app gets it from
+ * one place. The bare `NotAuthenticated` message ("Sign in to continue.") reads
+ * as a permission complaint mid-scoring, when what actually happened is that the
+ * save was refused and the work is still on screen unsaved.
+ *
+ * It says "didn't save" and stops there because the way back is a link rather
+ * than a sentence — `components/ControlError.tsx` renders it beside this, and
+ * claiming anything about what was or was not saved beyond this one refusal
+ * would be guessing.
  */
-export const SESSION_ENDED_MESSAGE =
-  "Your session ended. Reload this page to sign in again — your work so far is saved.";
+export const SESSION_ENDED_MESSAGE = "Your session ended, so that didn't save.";
 
 export function useAction<A extends unknown[], T>(fn: (...args: A) => Promise<ActionResult<T>>) {
   const [pending, startTransition] = useTransition();

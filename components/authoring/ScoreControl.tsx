@@ -6,6 +6,7 @@ import type { SubDimension } from "@/framework";
 import { clearScoreAction, setScoreAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
 import { EvidenceList } from "./EvidenceList";
+import { ControlError } from "../ControlError";
 
 /**
  * Author one sub-dimension score (spec R5 — the PM authors every score).
@@ -229,7 +230,7 @@ export function ScoreControl({
 
       <EvidenceList dealId={dealId} observations={candidates} />
 
-      {error && <div className="ctl-err" style={{ marginTop: 6 }}>{error}</div>}
+      <ControlError error={error} reauth={setScore.reauth || clearScore.reauth} style={{ marginTop: 6 }} />
     </div>
   );
 }

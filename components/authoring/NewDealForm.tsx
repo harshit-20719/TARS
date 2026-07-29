@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createDealAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
 import { Icon } from "@/components/icons";
+import { ControlError } from "../ControlError";
 
 /**
  * Open a deal record. Collapsed until asked for, so the deals list stays a list.
@@ -89,7 +90,7 @@ export function NewDealForm() {
           </button>
           <span className="ctl-note">You become the owning PM. Next step is the first transcript.</span>
         </div>
-        {create.error && <div className="ctl-err">{create.error}</div>}
+        <ControlError error={create.error} reauth={create.reauth} />
       </div>
     </div>
   );

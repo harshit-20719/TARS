@@ -643,3 +643,5 @@ svg.i.sm { width: 13px; height: 13px; }
 /* The first literal env var name shown in prose. Plex Mono rather than the
    browser's monospace default, which is a font this design never uses. */
 .callout code { font-family: var(--font-data); font-size: 0.94em; color: var(--ink); }
+/* The way back out of an ended session, inside the refusal block. */
+.ctl-err-link { color: var(--bad); text-decoration: underline; white-space: nowrap; }

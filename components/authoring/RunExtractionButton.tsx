@@ -4,6 +4,7 @@ import { useState } from "react";
 import { runExtractionAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
 import { Icon } from "@/components/icons";
+import { ControlError } from "../ControlError";
 
 /**
  * Run (or re-run) extraction on one saved call.
@@ -54,7 +55,7 @@ export function RunExtractionButton({
           {summary.claims} claim{summary.claims === 1 ? "" : "s"}
         </span>
       )}
-      {extract.error && <span className="ctl-err">{extract.error}</span>}
+      <ControlError error={extract.error} reauth={extract.reauth} as="span" />
 
       {summary && summary.failedBlocks.length > 0 && (
         <div className="ctl-err" style={{ flexBasis: "100%" }}>
