@@ -654,3 +654,41 @@ svg.i.sm { width: 13px; height: 13px; }
 .callout code { font-family: var(--font-data); font-size: 0.94em; color: var(--ink); }
 /* The way back out of an ended session, inside the refusal block. */
 .ctl-err-link { color: var(--bad); text-decoration: underline; white-space: nowrap; }
+
+/* ---------- fireflies import (U6) ---------- */
+/* The reach disclosure. Sized and coloured like body prose rather than like a
+   note, because it is the thing a reader has to take in before the list — not a
+   footnote to it. */
+.ff-reach {
+  font-size: 12.5px; line-height: 1.55; color: var(--ink-2);
+  border-left: 2px solid var(--line); padding-left: 10px; margin: 0 0 14px;
+}
+.ff-reach b { color: var(--ink); font-weight: 580; }
+.ff-note { font-size: 11.5px; color: var(--ink-3); margin: 6px 0 0; }
+.ff-search { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ff-search label { font-size: 12px; color: var(--ink-2); }
+.ff-search .inp { flex: 1; min-width: 220px; }
+/* Pending, failed, and both empties all land here, so they occupy the same
+   vertical space and the list does not jump as the state changes. */
+.ff-state { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.ff-list { list-style: none; margin: 14px 0 0; padding: 0; border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; }
+.ff-row + .ff-row { border-top: 1px solid var(--line); }
+.ff-row.picked { background: var(--surface-3); }
+.ff-pick {
+  display: grid; gap: 2px; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: 0; padding: 9px 12px; font: inherit; color: inherit;
+}
+.ff-pick:hover { background: var(--surface-3); }
+.ff-title { font-size: 13px; font-weight: 560; color: var(--ink); }
+.ff-meta { font-size: 11.5px; color: var(--ink-3); }
+.ff-meta.mono { font-family: var(--font-data); }
+.ff-page { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+/* The chosen meeting restates who was on it, so the confirmation is read against
+   the participants rather than against a title nobody chose carefully. */
+.ff-picked { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.ff-picked-head { font-size: 12.5px; color: var(--ink-2); }
+.ff-picked-head b { color: var(--ink); font-weight: 580; }
+/* The source meeting id, printed on an imported call. Plex Mono for the same
+   reason the callout's code is: the browser's monospace default is a font this
+   design never uses. */
+.card-note code { font-family: var(--font-data); font-size: 0.94em; color: var(--ink-2); }

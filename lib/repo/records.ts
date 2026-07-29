@@ -52,6 +52,28 @@ function toCall(row: Prisma.CallGetPayload<{}>): Call {
     date: formatRecordDate(row.date),
     transcript: row.transcript,
     extracted: row.extracted,
+    ...importAttribution(row),
+  };
+}
+
+/**
+ * The Fireflies attribution, present only on an imported call.
+ *
+ * Spread conditionally, the way `toObservation` handles `speaker`. The record
+ * contract makes absence mean something here — a call with no `sourceMeetingId`
+ * is a pasted call, which is every call the fixtures describe and every call
+ * written before importing existed — so emitting the keys with `undefined`
+ * values would blur "pasted" into "imported, attribution missing" for anything
+ * that inspects the shape rather than the values. `toEqual` would not notice;
+ * lib/services/import.test.ts checks the keys themselves for that reason.
+ */
+function importAttribution(row: {
+  importedByEmail: string | null;
+  sourceMeetingId: string | null;
+}): Pick<Call, "importedByEmail" | "sourceMeetingId"> {
+  return {
+    ...(row.importedByEmail ? { importedByEmail: row.importedByEmail } : {}),
+    ...(row.sourceMeetingId ? { sourceMeetingId: row.sourceMeetingId } : {}),
   };
 }
 
@@ -69,6 +91,8 @@ const CALL_META_SELECT = {
   label: true,
   date: true,
   extracted: true,
+  importedByEmail: true,
+  sourceMeetingId: true,
 } as const;
 
 type CallMetaRow = Prisma.CallGetPayload<{ select: typeof CALL_META_SELECT }> & {
@@ -84,6 +108,7 @@ function toCallMeta(row: CallMetaRow): CallMeta {
     date: formatRecordDate(row.date),
     extracted: row.extracted,
     transcriptChars: row.transcriptChars,
+    ...importAttribution(row),
   };
 }
 

@@ -23,7 +23,14 @@ import { requireAuthor, requireRole } from "@/lib/session";
 import { RuleViolation } from "@/lib/domain/rules";
 import { CodecError } from "@/lib/domain/codec";
 import { ExtractionError } from "@/lib/extraction/extract";
+/**
+ * From lib/fireflies/types rather than lib/fireflies/client, so recognising a
+ * Fireflies failure here does not pull the fetch client — and its credential
+ * read — into every module that imports an action.
+ */
+import { FirefliesError, type FirefliesMeeting } from "@/lib/fireflies/types";
 import * as capture from "@/lib/services/capture";
+import * as importing from "@/lib/services/import";
 import * as judgment from "@/lib/services/judgment";
 import * as people from "@/lib/services/people";
 import type { ScoreValue } from "@/mock/types";
@@ -51,6 +58,15 @@ function toResult(e: unknown): ActionFailure {
   if (e instanceof RuleViolation) return { ok: false, error: e.message, field: e.field };
   if (e instanceof CodecError) return { ok: false, error: e.message };
   if (e instanceof ExtractionError) return { ok: false, error: e.message };
+  /**
+   * Alongside ExtractionError for the same reason: everything below rethrows,
+   * and a rethrown error leaves the action as React's generic render failure
+   * with the message stripped. A mistyped Fireflies key, a meeting that was
+   * recorded but never transcribed, a rate limit — all of them are things the
+   * person pressing the button can act on, and all of them would otherwise
+   * arrive as "an error occurred".
+   */
+  if (e instanceof FirefliesError) return { ok: false, error: e.message };
   /**
    * Flagged separately from NotAuthorized because the two need different
    * answers. A wrong role is a fact the person cannot act on; an ended session
@@ -185,6 +201,53 @@ export async function runExtractionAction(
         failedBlocks: summary.failedBlocks.map((f) => ({ label: f.label, reason: f.reason })),
       },
     };
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+// ------------------------------------------------------- fireflies import
+
+/**
+ * The meetings the picker lists (R11).
+ *
+ * `requireAuthor` like every other action here, and worth being explicit about
+ * what that does and does not do: since U1 every role authors, so this refuses
+ * nobody who is signed in (KTD11). What it does refuse is a signed-out caller —
+ * and the whole shared Fireflies account sits behind it, which is why a read
+ * gets the same guard the writes have rather than none.
+ *
+ * Nothing is revalidated: this reads Fireflies, not the record.
+ */
+export async function listFirefliesMeetingsAction(
+  options: { search?: string; limit?: number; skip?: number } = {},
+): Promise<ActionResult<FirefliesMeeting[]>> {
+  try {
+    const actor = await requireAuthor();
+    const meetings = await importing.listFirefliesMeetings(actor, options);
+    return { ok: true, data: meetings };
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/**
+ * Import one chosen meeting onto a deal (R14, R15, R24, R25).
+ *
+ * The result carries the new call's id and number and stops there. The service
+ * returns no transcript, and this restates the two fields rather than spreading
+ * what it was handed, so a later change to the service's return cannot start
+ * shipping a founder call back through a server-action response.
+ */
+export async function importFirefliesCallAction(raw: unknown): Promise<
+  ActionResult<{ callId: string; number: number }>
+> {
+  try {
+    const actor = await requireAuthor();
+    const imported = await importing.importFirefliesCall(actor, raw);
+    const dealId = (raw as { dealId?: string })?.dealId;
+    if (dealId) revalidateDeal(dealId);
+    return { ok: true, data: { callId: imported.callId, number: imported.number } };
   } catch (e) {
     return toResult(e);
   }

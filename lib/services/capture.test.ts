@@ -237,6 +237,34 @@ describe("calls", () => {
       addCall(pm, { dealId, number: 3, label: "Replacement", transcript: TRANSCRIPT }),
     ).resolves.toBeTruthy();
   });
+
+  /**
+   * R24, from the other side. `addCallAction` hands this browser input straight
+   * through, so an importer taken from the payload would be an attribution
+   * anybody could write — and the point of recording who reached into the shared
+   * Fireflies account is that they cannot. The importer is read off the actor,
+   * and only lib/services/import.ts sets a source meeting at all.
+   *
+   * The same argument, and the same shape of test, as the smuggled `ownerId`
+   * above.
+   */
+  it("ignores an importer smuggled into a pasted call", async () => {
+    const dealId = await newDeal("Forged Attribution Test");
+
+    const callId = await addCall(pm, {
+      dealId,
+      number: 1,
+      label: "First founder call",
+      transcript: TRANSCRIPT,
+      importedById: partner.id,
+      importedByEmail: "someone.else@biome.in",
+    });
+
+    const row = await db.call.findUniqueOrThrow({ where: { id: callId } });
+    expect(row.importedById).toBeNull();
+    expect(row.importedByEmail).toBeNull();
+    expect(row.sourceMeetingId).toBeNull();
+  });
 });
 
 describe("extraction persistence", () => {

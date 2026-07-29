@@ -54,6 +54,19 @@ export interface Call {
   date: string;
   transcript: string;
   extracted: boolean;
+  /**
+   * Who pulled this call out of Fireflies, by address (R24). Absent on a pasted
+   * call — which is what every call was before importing existed, so absent has
+   * to keep meaning "pasted" rather than "attribution lost".
+   *
+   * The address and not the user id, for the same reason `Deal` carries
+   * `ownerPm` and not `ownerId`: a user id is a permission handle and the record
+   * contract is not where permissions are decided. It is also what survives the
+   * account being deleted, which is the half of R24 that matters at offboarding.
+   */
+  importedByEmail?: string;
+  /** The Fireflies meeting it came from. Absent on a pasted call. */
+  sourceMeetingId?: string;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { getCalls, getDeal, getRecord } from "@/lib/data";
 import { AddCallForm } from "@/components/authoring/AddCallForm";
+import { ImportFromFireflies } from "@/components/authoring/ImportFromFireflies";
 import { RunExtractionButton } from "@/components/authoring/RunExtractionButton";
 import { DeleteCall } from "@/components/authoring/DeleteCall";
 
@@ -28,6 +29,13 @@ export default async function TranscriptPage({ params }: { params: Promise<{ dea
   // Read on the server: the key must never reach the browser, and the form only
   // needs to know whether the offer is available.
   const extractionEnabled = Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+  /**
+   * The same treatment for the Fireflies credential, and here it carries more
+   * weight (KTD10): this key opens every call Biome has ever recorded, and a
+   * `NEXT_PUBLIC_`-shaped mistake would put it in the browser bundle of a page
+   * every PM loads. A boolean is the whole of what the picker needs.
+   */
+  const firefliesEnabled = Boolean(process.env.FIREFLIES_API_KEY?.trim());
   const nextNumber = rec.calls.reduce((max, c) => Math.max(max, c.number), 0) + 1;
 
   return (
@@ -36,8 +44,8 @@ export default async function TranscriptPage({ params }: { params: Promise<{ dea
         <span className="eyebrow">Step 1 · Capture</span>
         <h1 className="page-title">Transcript &amp; calls</h1>
         <p className="page-lede">
-          Paste a call transcript tagged to a call number. On ingest the machine drafts observations and claim
-          entries — it never scores.
+          Paste a call transcript tagged to a call number, or import one from Fireflies. On ingest the machine
+          drafts observations and claim entries — it never scores.
         </p>
       </div>
 
@@ -89,6 +97,20 @@ export default async function TranscriptPage({ params }: { params: Promise<{ dea
                 </div>
               </div>
               <div className="card-note">
+                {/*
+                  Who reached into the shared Fireflies account for this call, on
+                  the call itself (R24). Rendered from the stored address rather
+                  than from a user relation, so it still reads correctly after
+                  that account is deleted — which is the case the attribution
+                  exists for.
+                */}
+                {c.sourceMeetingId && (
+                  <div>
+                    Imported from Fireflies
+                    {c.importedByEmail ? ` by ${c.importedByEmail}` : ""} · meeting{" "}
+                    <code>{c.sourceMeetingId}</code>
+                  </div>
+                )}
                 Speaker labels and timestamps are used when present in the pasted text. File upload and diarization
                 are deferred (spec D10).
               </div>
@@ -97,6 +119,13 @@ export default async function TranscriptPage({ params }: { params: Promise<{ dea
         })
       )}
 
+      {/*
+        Importing first and pasting second, because importing is the path with a
+        disclosure attached to it and the one a PM will reach for by default.
+        Pasting stays exactly where it was and exactly as it was (R12) — the two
+        are alternatives, not a migration.
+      */}
+      <ImportFromFireflies dealId={dealId} nextNumber={nextNumber} firefliesEnabled={firefliesEnabled} />
       <AddCallForm dealId={dealId} nextNumber={nextNumber} extractionEnabled={extractionEnabled} />
     </div>
   );

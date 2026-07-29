@@ -122,18 +122,36 @@ export const AddCallInput = z.object({
   label: z.string().trim().min(1, "Give the call a label."),
   date: z.string().trim().optional(),
   transcript: z.string().trim().min(1, "Paste the transcript."),
+  /**
+   * Set only by the Fireflies import path (lib/services/import.ts), and the one
+   * thing that makes this call an imported one rather than a pasted one.
+   *
+   * The importer's identity is deliberately *not* an input beside it — see the
+   * insert below. Everything a caller may state about where a transcript came
+   * from is here; who did it is taken from the actor.
+   */
+  sourceMeetingId: z.string().trim().min(1).optional(),
 });
 
-export async function addCall(actor: Actor, raw: unknown) {
-  assertMayAuthor(actor);
-  const input = AddCallInput.parse(raw);
-
+/**
+ * Whether this deal can take a call on this number — the whole of that rule, so
+ * that the paste path and the import path refuse in identical words.
+ *
+ * Separated out for the import path's sake specifically (AE5). Importing has to
+ * settle the number *before* it fetches anything, because a transcript pulled
+ * for a call that is then refused is a full workspace recording retrieved for
+ * nothing, with no attributed row left behind to record that it happened. Left
+ * inline in `addCall`, the import path would have had to either restate the rule
+ * — two messages for one refusal, drifting apart on the first edit — or fetch
+ * first and check after.
+ */
+export async function assertCallNumberFree(dealId: string, number: number): Promise<void> {
   const existing = await db.call.findUnique({
-    where: { dealId_number: { dealId: input.dealId, number: input.number } },
+    where: { dealId_number: { dealId, number } },
     select: { id: true },
   });
   if (existing) {
-    throw new RuleViolation(`call ${input.number} already exists for this deal`, "number");
+    throw new RuleViolation(`call ${number} already exists for this deal`, "number");
   }
 
   /**
@@ -149,17 +167,22 @@ export async function addCall(actor: Actor, raw: unknown) {
    * Refused here rather than repaired in the reading, because the reading cannot
    * tell the two apart after the fact.
    */
-  const orphaned = await db.observation.count({
-    where: { dealId: input.dealId, callNumber: input.number },
-  });
+  const orphaned = await db.observation.count({ where: { dealId, callNumber: number } });
   if (orphaned > 0) {
     throw new RuleViolation(
-      `call ${input.number} still has ${orphaned} observation${orphaned === 1 ? "" : "s"} ` +
+      `call ${number} still has ${orphaned} observation${orphaned === 1 ? "" : "s"} ` +
         `filed against it from a call that was removed. Use a different number, or clear those ` +
         `observations first.`,
       "number",
     );
   }
+}
+
+export async function addCall(actor: Actor, raw: unknown) {
+  assertMayAuthor(actor);
+  const input = AddCallInput.parse(raw);
+
+  await assertCallNumberFree(input.dealId, input.number);
 
   const call = await db.call.create({
     data: {
@@ -168,6 +191,30 @@ export async function addCall(actor: Actor, raw: unknown) {
       label: input.label,
       date: input.date ? parseRecordDate(input.date) : new Date(),
       transcript: input.transcript,
+      /**
+       * The attribution R24 asks for, written in the same insert as the
+       * transcript (KTD14).
+       *
+       * One insert rather than a follow-up update, because the update is the
+       * failure that matters: a transcript pulled out of the shared Fireflies
+       * account and then saved with nobody's name on it is precisely the row the
+       * attribution exists to prevent, and a second statement is a second chance
+       * to leave one.
+       *
+       * The importer is read off the actor and never off the payload. `addCall`
+       * is reachable from a browser through `addCallAction`, so an
+       * importer-email input would be a field a caller could set to somebody
+       * else — an attribution anyone can forge is not attribution. The source
+       * meeting id is an input because only the caller knows it, and a wrong one
+       * costs nothing beyond a duplicate check that misfires on that row.
+       */
+      ...(input.sourceMeetingId
+        ? {
+            sourceMeetingId: input.sourceMeetingId,
+            importedById: actor.id,
+            importedByEmail: actor.email,
+          }
+        : {}),
     },
   });
   return call.id;

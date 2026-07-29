@@ -35,6 +35,7 @@ export async function GET() {
     AUTH_GOOGLE_SECRET: present(process.env.AUTH_GOOGLE_SECRET),
     ADMIN_EMAILS: present(process.env.ADMIN_EMAILS),
     ANTHROPIC_API_KEY: present(process.env.ANTHROPIC_API_KEY),
+    FIREFLIES_API_KEY: present(process.env.FIREFLIES_API_KEY),
   };
 
   /**
@@ -126,6 +127,13 @@ export async function GET() {
        */
       extractionBlocks: RUBRICS.length,
       extractionEffort: process.env.EXTRACTION_EFFORT?.trim() || "low",
+      /**
+       * Whether the transcript page will offer the Fireflies picker at all. The
+       * commonest report about this feature is "the import control says it is
+       * off", and the variable is Production-only in the runbook — so preview
+       * deployments answer false here correctly rather than being broken.
+       */
+      firefliesImportEnabled: env.FIREFLIES_API_KEY,
     },
     { status: 200 },
   );

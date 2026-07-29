@@ -122,11 +122,30 @@ model Call {
   /// Set once the extraction service has drafted from this transcript.
   extracted  Boolean  @default(false)
 
+  /// Who pulled this transcript out of Fireflies (R24, KTD14). Null on a pasted
+  /// call, which is every call before the import path existed.
+  ///
+  /// Attribution rather than restriction is the control here, and it is the only
+  /// one available: Biome records every call on one shared Fireflies account, so
+  /// there is no per-person scope to enforce and any signed-in user can pull any
+  /// recording. The relation is SetNull like every other user relation in this
+  /// schema, which is why the address is kept beside it as a plain column — the
+  /// same shape as Deal.ownerPm. Offboarding deletes the account; the record of
+  /// who reached into the workspace has to outlive that.
+  importedById    String?
+  importedBy      User?   @relation("CallImporter", fields: [importedById], references: [id], onDelete: SetNull)
+  importedByEmail String?
+  /// The Fireflies meeting this transcript came from. Also what answers "is this
+  /// meeting already on this deal" before anything is fetched (R25).
+  sourceMeetingId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([dealId, number])
   @@index([dealId])
+  @@index([importedById])
+  @@index([dealId, sourceMeetingId])
 }
 
 /// A verbatim excerpt the machine drafted and the PM ruled on. Never a score.
@@ -319,6 +338,7 @@ model User {
   sessions Session[]
 
   ownedDeals           Deal[]              @relation("DealOwner")
+  importedCalls        Call[]              @relation("CallImporter")
   authoredScores       SubDimensionScore[] @relation("ScoreAuthor")
   authoredSlides       Slide[]             @relation("SlideAuthor")
   authoredFounderReads FounderTypeRead[]   @relation("FounderReadAuthor")
