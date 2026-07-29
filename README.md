@@ -6,9 +6,9 @@ A real Next.js app on Postgres, with Google SSO, role-gated authorship, and Clau
 
 ## What it does
 
-A PM opens a deal, pastes a call transcript, and the machine drafts observations and claims mapped to the six rubrics. The PM authors every sub-dimension score and every 0–10 pillar/track slide. The app renders the scorecard — capture grid, judgment block, and roll-up. There is **no total, no composite, and no gate verdict** (the framework's gate logic is still pending).
+A PM opens a deal, pastes a call transcript, and the machine drafts observations and claims mapped to the six rubrics. A person — PM, partner, or admin — authors every sub-dimension score and every 0–10 pillar/track slide. The app renders the scorecard — capture grid, judgment block, and roll-up. There is **no total, no composite, and no gate verdict** (the framework's gate logic is still pending).
 
-The core rule the app enforces: **the machine drafts, the PM scores, the app renders.** It never sets a score.
+The core rule the app enforces: **the machine drafts, a person scores, the app renders.** It never sets a score.
 
 ## Run it
 
@@ -25,7 +25,7 @@ Needs Postgres. Sign in with any seeded user (`pm@biome.in`, password `tars-dev`
 [`docs/runbooks/deploy-vercel.md`](docs/runbooks/deploy-vercel.md).
 
 ```bash
-npm test         # 176 tests, against a real Postgres test database
+npm test         # against a real Postgres test database
 npm run typecheck
 ```
 

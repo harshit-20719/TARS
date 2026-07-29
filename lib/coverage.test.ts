@@ -5,6 +5,7 @@ import {
   candidateEvidenceBySubDimension,
   coverageOf,
   observationsBySubDimension,
+  unevidencedCount,
 } from "./coverage";
 
 /**
@@ -140,8 +141,6 @@ describe("per call", () => {
     const b = reading.rows.find((r) => r.key === SUB_B)!;
     expect(a.perCall).toEqual(["has-evidence", "no-evidence"]);
     expect(b.perCall).toEqual(["no-evidence", "has-evidence"]);
-    expect(a.callNumbers).toEqual([1]);
-    expect(b.callNumbers).toEqual([2]);
   });
 
   it("reads a call that produced only rejected evidence as rejected for that call", () => {
@@ -237,5 +236,45 @@ describe("the shared grouping", () => {
     const second = obs({ subDimensionKey: SUB_A, quote: "second" });
     const got = observationsBySubDimension(record([first, second])).get(SUB_A)!;
     expect(got.map((o) => o.quote)).toEqual(["first", "second"]);
+  });
+});
+
+describe("the sidebar badge", () => {
+  /**
+   * `unevidencedCount` exists separately from `coverageOf` for cost (KTD5): it
+   * runs inside a per-deal loop on the deals index, where the 41-row per-call
+   * grid would be wasted work. That split is what let the two drift — the badge
+   * counted a rejected-only row as unevidenced while the page called it
+   * evidence-rejected, so the same record read 41 in one place and 40 in the
+   * other. These pin them together.
+   */
+  it("agrees with the page for a record holding every state at once", () => {
+    const rec = record([
+      obs({ subDimensionKey: SUB_A, status: "accepted" }),
+      obs({ subDimensionKey: SUB_B, status: "rejected" }),
+      obs({ subDimensionKey: SUB_B, status: "rejected" }),
+    ]);
+    // SUB_C and the other 38 rows have nothing recorded against them.
+    expect(unevidencedCount(rec)).toBe(coverageOf(rec).unevidenced);
+    expect(unevidencedCount(rec)).toBe(TOTAL_SUBS - 2);
+  });
+
+  it("does not count a rejected-only row as unevidenced", () => {
+    const rec = record([obs({ subDimensionKey: SUB_A, status: "rejected" })]);
+    expect(coverageOf(rec).rows.find((r) => r.key === SUB_A)?.state).toBe("evidence-rejected");
+    expect(unevidencedCount(rec)).toBe(TOTAL_SUBS - 1);
+    expect(unevidencedCount(rec)).toBe(coverageOf(rec).unevidenced);
+  });
+
+  it("agrees with the page when nothing is recorded at all", () => {
+    const rec = record([], []);
+    expect(unevidencedCount(rec)).toBe(TOTAL_SUBS);
+    expect(unevidencedCount(rec)).toBe(coverageOf(rec).unevidenced);
+  });
+
+  it("ignores another layer, as the page does", () => {
+    const rec = record([obs({ subDimensionKey: SUB_A, layer: "L2" as Observation["layer"] })]);
+    expect(unevidencedCount(rec)).toBe(TOTAL_SUBS);
+    expect(unevidencedCount(rec)).toBe(coverageOf(rec).unevidenced);
   });
 });

@@ -65,7 +65,7 @@ beforeEach(() => {
 
 describe("who the row is about", () => {
   it("names the person and shows the address the account is held under", () => {
-    renderRow({ person: person(), roleAtNextSignIn: "PM" });
+    renderRow({ person: person(), effectiveRole: "PM" });
     expect(screen.getByText("Pilot PM")).toBeTruthy();
     expect(screen.getByText("pm@biome.in")).toBeTruthy();
   });
@@ -73,16 +73,16 @@ describe("who the row is about", () => {
   // Google supplies a name; the dev credentials provider and a freshly
   // adapter-created row need not. A blank cell reads as a broken row.
   it("falls back to the email local part when there is no name", () => {
-    renderRow({ person: person({ name: null }), roleAtNextSignIn: "PM" });
+    renderRow({ person: person({ name: null }), effectiveRole: "PM" });
     expect(screen.getByText("pm")).toBeTruthy();
   });
 });
 
 describe("the two role columns", () => {
-  it("shows the stored role and the role at next sign-in separately", () => {
-    renderRow({ person: person({ role: "PARTNER" }), roleAtNextSignIn: "PARTNER" });
+  it("shows the stored role and the effective role separately", () => {
+    renderRow({ person: person({ role: "PARTNER" }), effectiveRole: "PARTNER" });
     expect(screen.getByRole("cell", { name: /stored role PARTNER/i })).toBeTruthy();
-    expect(screen.getByRole("cell", { name: /at next sign-in PARTNER/i })).toBeTruthy();
+    expect(screen.getByRole("cell", { name: /effective role PARTNER/i })).toBeTruthy();
   });
 
   /**
@@ -90,20 +90,20 @@ describe("the two role columns", () => {
    * row belonging to a configured admin is an ADMIN in every way that matters —
    * showing only the stored role would misreport who can manage users.
    */
-  it("reads ADMIN at next sign-in for a configured admin whose stored role says otherwise", () => {
+  it("reads ADMIN as effective for a configured admin whose stored role says otherwise", () => {
     renderRow({
       person: person({ role: "PM", email: "harshit@biome.in" }),
-      roleAtNextSignIn: "ADMIN",
+      effectiveRole: "ADMIN",
       configuredAdmin: true,
     });
     expect(screen.getByRole("cell", { name: /stored role PM/i })).toBeTruthy();
-    expect(screen.getByRole("cell", { name: /at next sign-in ADMIN/i })).toBeTruthy();
+    expect(screen.getByRole("cell", { name: /effective role ADMIN/i })).toBeTruthy();
   });
 });
 
 describe("changing the role", () => {
   it("offers all three roles with the stored one pressed", () => {
-    renderRow({ person: person({ role: "PARTNER" }), roleAtNextSignIn: "PARTNER" });
+    renderRow({ person: person({ role: "PARTNER" }), effectiveRole: "PARTNER" });
     for (const role of ["PM", "PARTNER", "ADMIN"]) {
       expect(screen.getByRole("button", { name: role })).toBeTruthy();
     }
@@ -114,13 +114,13 @@ describe("changing the role", () => {
   });
 
   it("sends the pressed role for this person", async () => {
-    renderRow({ person: person({ id: "u7" }), roleAtNextSignIn: "PM" });
+    renderRow({ person: person({ id: "u7" }), effectiveRole: "PM" });
     await press("ADMIN");
     expect(setRoleAction).toHaveBeenCalledWith("u7", "ADMIN");
   });
 
   it("does not re-send the role already stored", async () => {
-    renderRow({ person: person({ role: "PM" }), roleAtNextSignIn: "PM" });
+    renderRow({ person: person({ role: "PM" }), effectiveRole: "PM" });
     await press("PM");
     expect(setRoleAction).not.toHaveBeenCalled();
   });
@@ -135,7 +135,7 @@ describe("changing the role", () => {
       ok: false,
       error: "This is the last remaining ADMIN.",
     }));
-    renderRow({ person: person({ role: "ADMIN" }), roleAtNextSignIn: "ADMIN" });
+    renderRow({ person: person({ role: "ADMIN" }), effectiveRole: "ADMIN" });
     await press("PM");
     expect(screen.getByText(/last remaining ADMIN/)).toBeTruthy();
   });
@@ -145,7 +145,7 @@ describe("rows that cannot be changed say why", () => {
   it("states that a configured admin is set in ADMIN_EMAILS, before anything is pressed", () => {
     renderRow({
       person: person({ role: "ADMIN", email: "harshit@biome.in" }),
-      roleAtNextSignIn: "ADMIN",
+      effectiveRole: "ADMIN",
       configuredAdmin: true,
     });
     expect(screen.getByText(/ADMIN_EMAILS/)).toBeTruthy();
@@ -153,7 +153,7 @@ describe("rows that cannot be changed say why", () => {
   });
 
   it("states that the last ADMIN is the last one, before anything is pressed", () => {
-    renderRow({ person: person({ role: "ADMIN" }), roleAtNextSignIn: "ADMIN", lastAdmin: true });
+    renderRow({ person: person({ role: "ADMIN" }), effectiveRole: "ADMIN", lastAdmin: true });
     expect(screen.getByText(/last remaining ADMIN/)).toBeTruthy();
     expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
@@ -161,12 +161,12 @@ describe("rows that cannot be changed say why", () => {
   // The stated-off form still has to say what the role *is*, or the row loses
   // the column it was fixed in.
   it("still reads the stored role when the control is off", () => {
-    renderRow({ person: person({ role: "ADMIN" }), roleAtNextSignIn: "ADMIN", lastAdmin: true });
+    renderRow({ person: person({ role: "ADMIN" }), effectiveRole: "ADMIN", lastAdmin: true });
     expect(screen.getByRole("cell", { name: /stored role ADMIN/i })).toBeTruthy();
   });
 
   it("leaves an ordinary row pressable", () => {
-    renderRow({ person: person(), roleAtNextSignIn: "PM" });
+    renderRow({ person: person(), effectiveRole: "PM" });
     expect(screen.getAllByRole("button")).toHaveLength(3);
   });
 });
@@ -179,9 +179,9 @@ describe("rows that cannot be changed say why", () => {
  * control it qualifies so it cannot drift away from it.
  */
 describe("what the page promises", () => {
-  it("says a change applies at the next sign-in", () => {
+  it("says a change applies at the next request", () => {
     render(<RoleChangeNote />);
-    expect(screen.getByText(/next sign-in/i)).toBeTruthy();
+    expect(screen.getByText(/next request/i)).toBeTruthy();
   });
 
   it("does not claim the change is immediate", () => {

@@ -131,9 +131,14 @@ export function AddCallForm({
             </span>
           )}
         </div>
+        {/*
+          Flag taken from whichever hook supplied the message. OR-ing them let a
+          plain refusal inherit a "Sign in again" link from the other hook's
+          earlier session failure.
+        */}
         <ControlError
           error={addCall.error ?? extract.error}
-          reauth={addCall.reauth || extract.reauth}
+          reauth={(addCall.error ? addCall.reauth : extract.reauth) ?? false}
         />
         {note && !addCall.error && !extract.error && (
           <div className="callout neutral" style={{ marginBottom: 0 }}>

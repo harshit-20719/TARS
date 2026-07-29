@@ -136,6 +136,31 @@ export async function addCall(actor: Actor, raw: unknown) {
     throw new RuleViolation(`call ${input.number} already exists for this deal`, "number");
   }
 
+  /**
+   * A number whose old evidence is still on the record cannot be reused.
+   *
+   * Deleting a call deliberately leaves its observations behind — they are keyed
+   * by call number, not by the transcript, and a score may already cite them. So
+   * a freed number can still have evidence hanging off it, and re-adding a call
+   * there would silently adopt the removed call's quotes: coverage would show
+   * them under the new call, and a PM reading which call produced what would be
+   * told something untrue.
+   *
+   * Refused here rather than repaired in the reading, because the reading cannot
+   * tell the two apart after the fact.
+   */
+  const orphaned = await db.observation.count({
+    where: { dealId: input.dealId, callNumber: input.number },
+  });
+  if (orphaned > 0) {
+    throw new RuleViolation(
+      `call ${input.number} still has ${orphaned} observation${orphaned === 1 ? "" : "s"} ` +
+        `filed against it from a call that was removed. Use a different number, or clear those ` +
+        `observations first.`,
+      "number",
+    );
+  }
+
   const call = await db.call.create({
     data: {
       dealId: input.dealId,

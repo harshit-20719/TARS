@@ -359,10 +359,22 @@ No redeploy needed for the value to be read, but they must sign out and back in.
 role says who someone is, not what they may do. `ADMIN` adds user management.
 There is no read-only role, and no way to make one from the app.
 
+Change a role on the **People** page (in the top bar, ADMIN only) rather than in
+the database. It takes effect on that person's next request — they do not need to
+sign out and back in. An address in `ADMIN_EMAILS` outranks the stored role and
+cannot be changed from the app.
+
 **Removing someone.** Deleting their row in the database does **not** remove
 their access: signing in requires no pre-existing row, so they would sign in
 again and be recreated as an author. Suspend their `biome.in` Google account —
-that is the only thing that actually ends access.
+that is what stops them signing in.
+
+Suspension does not, on its own, kill the session they already hold. Sessions are
+JWTs with no server-side store, so an issued one lives until it hits a bound: 8
+hours idle, 12 hours absolute. To end every live session immediately, rotate
+`AUTH_SECRET` in Vercel and redeploy — that invalidates every issued token, so it
+signs out the whole team, not just the person you are removing. Worth it for a
+departure that matters; overkill for most.
 
 **Custom domain.** Settings → Domains. If you add one, go back to stage 4b and
 add a second redirect URI for the new domain.

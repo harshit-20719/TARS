@@ -20,6 +20,7 @@
  * is what the tests and the seed import.
  */
 
+import { cache } from "react";
 import { connection } from "next/server";
 import * as repo from "@/lib/repo/records";
 import type { ReassignCandidate } from "@/lib/repo/records";
@@ -39,15 +40,30 @@ export async function listDeals(ownerId?: string): Promise<Deal[]> {
   return repo.listDeals(ownerId);
 }
 
-export async function getDeal(id: string): Promise<Deal | undefined> {
+/**
+ * Memoised per request, because the deal layout and the page inside it both need
+ * the same record.
+ *
+ * Every route under /deals/[dealId] renders inside a layout that already fetched
+ * the deal and its record, and then fetches them again for itself — sibling
+ * server components cannot pass props to each other, so each one asks. Without
+ * this, opening any deal page paid for the whole record twice, and
+ * `revalidateDeal` busts that layout cache on nearly every mutation, so it
+ * recurred through ordinary use rather than only on a cold load.
+ *
+ * React's `cache` is scoped to one render, so this folds the duplicates into a
+ * single query and shares nothing between requests. `connection()` still runs on
+ * the first call, so the request-time opt-in below is unchanged.
+ */
+export const getDeal = cache(async (id: string): Promise<Deal | undefined> => {
   await connection();
   return repo.getDeal(id);
-}
+});
 
-export async function getRecord(id: string): Promise<DealRecord | undefined> {
+export const getRecord = cache(async (id: string): Promise<DealRecord | undefined> => {
   await connection();
   return repo.getRecord(id);
-}
+});
 
 /**
  * The transcripts themselves, for the one page that shows them.

@@ -12,6 +12,7 @@ import {
   clearScore,
   createDeal,
   decideObservation,
+  deleteCall,
   runExtractionForCall,
   setScore,
   updateDeal,
@@ -196,6 +197,45 @@ describe("calls", () => {
     const base = { dealId, number: 1, label: "First", transcript: TRANSCRIPT };
     await addCall(pm, base);
     await expect(addCall(pm, base)).rejects.toThrow(RuleViolation);
+  });
+
+  /**
+   * Deleting a call leaves its observations behind on purpose — they are keyed by
+   * call number and a score may already cite them. Re-adding a call on that
+   * number would silently adopt them, and coverage would then attribute a removed
+   * call's quotes to the new one.
+   */
+  it("refuses to reuse a call number that still has evidence filed against it", async () => {
+    const dealId = await newDeal("Reused Number Test");
+    const callId = await addCall(pm, {
+      dealId,
+      number: 2,
+      label: "Second",
+      transcript: TRANSCRIPT,
+    });
+    await db.observation.create({
+      data: {
+        dealId,
+        callNumber: 2,
+        rubricKey: "ft",
+        subDimensionKey: "earned-insight",
+        quote: "six years inside bank ops",
+        status: "accepted",
+      },
+    });
+
+    await deleteCall(pm, callId);
+    // The observation survives the call, which is the documented behaviour.
+    expect(await db.observation.count({ where: { dealId, callNumber: 2 } })).toBe(1);
+
+    await expect(
+      addCall(pm, { dealId, number: 2, label: "Replacement", transcript: TRANSCRIPT }),
+    ).rejects.toThrow(/still has 1 observation/);
+
+    // A free number is unaffected.
+    await expect(
+      addCall(pm, { dealId, number: 3, label: "Replacement", transcript: TRANSCRIPT }),
+    ).resolves.toBeTruthy();
   });
 });
 

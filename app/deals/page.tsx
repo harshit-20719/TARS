@@ -126,7 +126,7 @@ export default async function DealsPage({
         segments={[
           { label: "RECORDS", value: String(deals.length) },
           { label: "LAYER", value: "L1 · CONVICTION" },
-          { label: "MODE", value: "machine drafts · PM scores · app renders", tone: "accent" },
+          { label: "MODE", value: "machine drafts · you score · app renders", tone: "accent" },
         ]}
       />
     </main>

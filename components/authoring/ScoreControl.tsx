@@ -9,7 +9,7 @@ import { EvidenceList } from "./EvidenceList";
 import { ControlError } from "../ControlError";
 
 /**
- * Author one sub-dimension score (spec R5 — the PM authors every score).
+ * Author one sub-dimension score (spec R5 — a person authors every score).
  *
  * The options offered are the row's own value set, taken from the frozen rubric
  * config: 1–5 plus NE on a scale row, Fail/Unverified/Pass on a binary one. There
@@ -64,7 +64,14 @@ export function ScoreControl({
   const [flagNote, setFlagNote] = useState(score?.flagNote ?? "");
   const [editingNote, setEditingNote] = useState(false);
 
-  const error = setScore.error ?? clearScore.error;
+  /**
+   * Message and flag come from the *same* hook. Selecting the message with `??`
+   * while OR-ing the flag across both let a plain validation refusal inherit a
+   * "Sign in again" link from the other hook's earlier session failure — each
+   * useAction resets only its own state, so a stale reauth outlives its message.
+   */
+  const failed = setScore.error ? setScore : clearScore.error ? clearScore : null;
+  const error = failed?.error ?? null;
   /** A save is in flight on this row. Overlapping saves can resolve out of order. */
   const busy = setScore.pending || clearScore.pending;
 
@@ -230,7 +237,7 @@ export function ScoreControl({
 
       <EvidenceList dealId={dealId} observations={candidates} />
 
-      <ControlError error={error} reauth={setScore.reauth || clearScore.reauth} style={{ marginTop: 6 }} />
+      <ControlError error={error} reauth={failed?.reauth ?? false} style={{ marginTop: 6 }} />
     </div>
   );
 }

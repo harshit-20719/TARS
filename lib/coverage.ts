@@ -37,8 +37,6 @@ export interface CoverageRow {
   state: CoverageState;
   /** One state per call, aligned to `callNumbers` on the reading. */
   perCall: CoverageState[];
-  /** Calls that contributed evidence still standing. */
-  callNumbers: number[];
 }
 
 export interface CoverageRubricGroup {
@@ -126,9 +124,6 @@ export function coverageOf(rec: DealRecord): CoverageReading {
       rubricLabel: sub.rubricLabel,
       state: stateOf(observations),
       perCall: callNumbers.map((n) => stateOf(observations?.filter((o) => o.callNumber === n))),
-      callNumbers: callNumbers.filter((n) =>
-        observations?.some((o) => o.callNumber === n && o.status !== "rejected"),
-      ),
     };
   });
 
@@ -156,10 +151,18 @@ export function coverageOf(rec: DealRecord): CoverageReading {
  * pass and no grouping.
  */
 export function unevidencedCount(rec: DealRecord): number {
-  const evidenced = new Set(
-    rec.observations
-      .filter((o) => o.layer === LAYER && o.status !== "rejected")
-      .map((o) => o.subDimensionKey),
+  /**
+   * "Touched" means any observation at all, matching `stateOf`'s no-evidence
+   * rule — not any *non-rejected* one.
+   *
+   * Filtering rejected observations out here counted a row whose evidence was
+   * thrown out as unevidenced, while `coverageOf` called that row
+   * evidence-rejected and excluded it. The badge and the page then printed
+   * different numbers for the same record, collapsing the exact distinction
+   * this module exists to draw.
+   */
+  const touched = new Set(
+    rec.observations.filter((o) => o.layer === LAYER).map((o) => o.subDimensionKey),
   );
-  return TOTAL_SUBS - ALL_SUBS.filter((s) => evidenced.has(s.key)).length;
+  return TOTAL_SUBS - ALL_SUBS.filter((s) => touched.has(s.key)).length;
 }

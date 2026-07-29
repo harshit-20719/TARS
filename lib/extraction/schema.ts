@@ -13,7 +13,7 @@
  * the model has to hold in mind shrinks from forty-one rows to six or seven.
  *
  * Note what is absent: there is no score field anywhere. The machine drafts
- * observations and claims; the PM authors every score (spec R5). The service
+ * observations and claims; a person authors every score (spec R5). The service
  * cannot write one because the schema gives it nowhere to put one.
  *
  * `confidence` is not a score. It is the model rating its own filing — "does this

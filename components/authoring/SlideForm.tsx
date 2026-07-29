@@ -62,7 +62,14 @@ export function SlideForm({
   const [touchedGuard, setTouchedGuard] = useState(false);
 
   const pending = save.pending || clear.pending;
-  const error = save.error ?? clear.error;
+  /**
+   * Message and flag come from the *same* hook. Selecting the message with `??`
+   * while OR-ing the flag across both let a plain validation refusal inherit a
+   * "Sign in again" link from the other hook's earlier session failure — each
+   * useAction resets only its own state, so a stale reauth outlives its message.
+   */
+  const failed = save.error ? save : clear.error ? clear : null;
+  const error = failed?.error ?? null;
 
   const banked = read === null ? null : Math.min(read, L1_CAP);
   const provisional = read !== null && read > L1_CAP ? read : null;
@@ -208,7 +215,7 @@ export function SlideForm({
         )}
       </div>
 
-      <ControlError error={error} reauth={save.reauth || clear.reauth} style={{ marginTop: 4 }} />
+      <ControlError error={error} reauth={failed?.reauth ?? false} style={{ marginTop: 4 }} />
     </div>
   );
 }

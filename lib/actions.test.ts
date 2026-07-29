@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Role } from "@prisma/client";
+import { db } from "@/lib/db";
 
 /**
  * The action layer's guard on user management (R6).
@@ -18,6 +19,12 @@ import { Role } from "@prisma/client";
  *
  * lib/auth is mocked rather than lib/session, so `requireRole` itself is the real
  * thing under test; the mock only decides who is signed in.
+ *
+ * The signed-in users are real rows, because `currentActor` resolves the role
+ * from the database rather than from the token — a change made precisely so a
+ * demoted ADMIN cannot keep acting as one. A fake id would now resolve to no
+ * actor at all, which is itself the guarantee: authorization here follows the
+ * stored row, not what the session claims.
  */
 
 let signedIn: { user: { id: string; email: string; name: string | null; role: Role } } | null =
@@ -36,8 +43,32 @@ vi.mock("@/lib/services/people", () => ({
 
 const { setRoleAction } = await import("./actions");
 
+/** One real row per role, so the database lookup in `currentActor` resolves. */
+const ids: Partial<Record<Role, string>> = {};
+
+beforeAll(async () => {
+  // Empty, so resolveRole returns the stored role rather than promoting anyone.
+  vi.stubEnv("ADMIN_EMAILS", "");
+  for (const role of [Role.PM, Role.PARTNER, Role.ADMIN]) {
+    const row = await db.user.upsert({
+      where: { email: `actions-${role.toLowerCase()}@biome.in` },
+      update: { role },
+      create: { email: `actions-${role.toLowerCase()}@biome.in`, name: null, role },
+      select: { id: true },
+    });
+    ids[role] = row.id;
+  }
+});
+
+afterAll(async () => {
+  vi.unstubAllEnvs();
+  await db.user.deleteMany({ where: { id: { in: Object.values(ids) as string[] } } });
+});
+
 const signInAs = (role: Role) => {
-  signedIn = { user: { id: `u-${role}`, email: `${role.toLowerCase()}@biome.in`, name: null, role } };
+  signedIn = {
+    user: { id: ids[role]!, email: `actions-${role.toLowerCase()}@biome.in`, name: null, role },
+  };
 };
 
 beforeEach(() => setRole.mockClear());
@@ -69,6 +100,22 @@ describe("setRoleAction", () => {
 
     expect(result.ok === false && result.error).toMatch(/ADMIN/);
     expect(result.ok === false && result.reauth).toBeUndefined();
+  });
+
+  /**
+   * The point of resolving from the database: the session can claim ADMIN and be
+   * refused anyway. This is the demoted-admin case — their token still says
+   * ADMIN, the stored row says PM, and the row is what decides.
+   */
+  it("refuses a session claiming ADMIN when the stored row says otherwise", async () => {
+    signedIn = {
+      user: { id: ids[Role.PM]!, email: "actions-pm@biome.in", name: null, role: Role.ADMIN },
+    };
+
+    const result = await setRoleAction("someone", "PARTNER");
+
+    expect(result.ok).toBe(false);
+    expect(setRole).not.toHaveBeenCalled();
   });
 
   it("asks a signed-out caller to sign in again rather than reporting a wrong role", async () => {

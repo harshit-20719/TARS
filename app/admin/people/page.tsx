@@ -74,7 +74,7 @@ export default async function PeoplePage() {
                       read as effective right now, which is the one thing it is
                       not while the person's session is still alive (KTD7).
                     */}
-                    <th>Role at next sign-in</th>
+                    <th>Effective role</th>
                     <th>Added</th>
                   </tr>
                 </thead>
@@ -83,7 +83,7 @@ export default async function PeoplePage() {
                     <PersonRow
                       key={person.id}
                       person={person}
-                      roleAtNextSignIn={resolveRole(person.email, person.role)}
+                      effectiveRole={resolveRole(person.email, person.role)}
                       configuredAdmin={isConfiguredAdmin(person.email)}
                       lastAdmin={person.role === "ADMIN" && storedAdmins <= 1}
                     />

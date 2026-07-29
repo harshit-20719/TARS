@@ -11,16 +11,16 @@ import { personLabel } from "./ui";
  * One person, and the role they hold (R2, R3, R4).
  *
  * Two role columns, because the two can disagree and the difference is the whole
- * point. The stored role is what the database says; the role at next sign-in is
- * what `resolveRole` will hand them when they authenticate, which for an address
- * in ADMIN_EMAILS is ADMIN whatever the row says. Showing only the stored role
- * would misreport who can manage users — and showing only the resolved one would
- * hide the row that is about to be overwritten.
+ * point. The stored role is what the database says; the effective role is what
+ * `resolveRole` resolves it to, which for an address in ADMIN_EMAILS is ADMIN
+ * whatever the row says. Showing only the stored role would misreport who can
+ * manage users — and showing only the resolved one would hide the row that is
+ * being overwritten.
  *
- * Deliberately not "effective role". That reads as effective *now*, and it is
- * not: sessions are JWT-strategy and carry the role in the token (KTD7), so the
- * person keeps whatever they signed in with until that session ends. Naming the
- * column for the moment the change lands is the point, not a nicety.
+ * It says "effective" because it now is. This column was called "at next
+ * sign-in" while authorization read the role off the token, which only refreshed
+ * at sign-in; `currentActor` reads the stored row every request, so a change
+ * lands on the person's next request rather than their next session.
  *
  * Lives in flat components/ rather than components/authoring/, which is for
  * mutations of the deal record. This mutates users.
@@ -29,7 +29,7 @@ import { personLabel } from "./ui";
 const ROLES: RoleName[] = ["PM", "PARTNER", "ADMIN"];
 
 /**
- * What pressing a role actually does (KTD7, R3).
+ * What pressing a role actually does (R3).
  *
  * Rendered by the people page, but declared here so it cannot drift away from
  * the control it qualifies — the same reason SESSION_ENDED_MESSAGE lives beside
@@ -38,24 +38,23 @@ const ROLES: RoleName[] = ["PM", "PARTNER", "ADMIN"];
 export function RoleChangeNote() {
   return (
     <span>
-      A role change is written now and applies at that person&apos;s <b>next sign-in</b>. Their
-      current session carries the role it was issued with, so nothing changes for them until they
-      sign out and back in. An address listed in <code>ADMIN_EMAILS</code> is promoted to ADMIN on
-      every sign-in and cannot be changed here.
+      A role change is written now and takes effect on that person&apos;s <b>next request</b> —
+      they do not need to sign out and back in. An address listed in <code>ADMIN_EMAILS</code>
+      outranks the stored role and cannot be changed here.
     </span>
   );
 }
 
 export function PersonRow({
   person,
-  roleAtNextSignIn,
+  effectiveRole,
   configuredAdmin = false,
   lastAdmin = false,
 }: {
   person: Person;
   /** `resolveRole(email, storedRole)` — computed on the server, where the env is. */
-  roleAtNextSignIn: RoleName;
-  /** Listed in ADMIN_EMAILS, so a demotion would be undone at their next sign-in. */
+  effectiveRole: RoleName;
+  /** Listed in ADMIN_EMAILS, so a demotion here would be overridden anyway. */
   configuredAdmin?: boolean;
   /** The only stored ADMIN left. Demoting them would leave nobody able to manage users. */
   lastAdmin?: boolean;
@@ -132,9 +131,9 @@ export function PersonRow({
         <ControlError error={setRole.error} reauth={setRole.reauth} />
       </td>
 
-      <td aria-label={`At next sign-in ${roleAtNextSignIn}`}>
-        <span className={`chip ${roleAtNextSignIn === person.role ? "line" : "accent"} mono`}>
-          {roleAtNextSignIn}
+      <td aria-label={`Effective role ${effectiveRole}`}>
+        <span className={`chip ${effectiveRole === person.role ? "line" : "accent"} mono`}>
+          {effectiveRole}
         </span>
       </td>
 
