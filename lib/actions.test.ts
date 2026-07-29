@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { Role } from "@prisma/client";
+import { Prisma, Role } from "@prisma/client";
 import { db } from "@/lib/db";
+import { RuleViolation } from "@/lib/domain/rules";
 import { FirefliesError } from "@/lib/fireflies/types";
 
 /**
@@ -313,5 +314,110 @@ describe("the Fireflies actions", () => {
 
     expect(result).toEqual({ ok: true, data: { callId: "c9", number: 3 } });
     expect(JSON.stringify(result)).not.toContain("settlement operations");
+  });
+});
+
+/**
+ * Database failures, which used to be the one class of failure that reached the
+ * PM saying nothing.
+ *
+ * `toResult` translated the typed domain errors and rethrew the rest, and a
+ * rethrown error arrives in the browser as React's "an unexpected response was
+ * received from the server" with the message stripped — so the failure most
+ * likely to happen on a cold serverless function was the least legible one.
+ * These run through the import action because the service is already mocked
+ * there; the branch under test is shared by every action in the module.
+ */
+describe("database failures", () => {
+  beforeEach(() => {
+    importFirefliesCall.mockReset();
+  });
+
+  it("returns a transaction timeout as a result rather than letting it escape", async () => {
+    signInAs(Role.PM);
+    importFirefliesCall.mockImplementation(async () => {
+      throw new Prisma.PrismaClientKnownRequestError("Transaction API error", {
+        code: "P2028",
+        clientVersion: "6.19.3",
+      });
+    });
+
+    const result = await importFirefliesCallAction({ dealId: "halten", meetingId: "m1" });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/took too long|nothing was saved/i);
+  });
+
+  /**
+   * A missing migration is the one database failure with a specific fix, so it
+   * gets a specific sentence and keeps its code.
+   */
+  it("names a schema mismatch as a migration that has not run", async () => {
+    signInAs(Role.PM);
+    importFirefliesCall.mockImplementation(async () => {
+      throw new Prisma.PrismaClientKnownRequestError("column does not exist", {
+        code: "P2022",
+        clientVersion: "6.19.3",
+      });
+    });
+
+    const result = await importFirefliesCallAction({ dealId: "halten", meetingId: "m1" });
+
+    expect(result.ok === false && result.error).toMatch(/migration/i);
+    expect(result.ok === false && result.error).toContain("P2022");
+  });
+
+  /**
+   * The load-bearing one. Prisma quotes the connection string it could not
+   * reach, and DATABASE_URL carries the password — so the message is described,
+   * never passed through. A translation that leaked the credential would be
+   * worse than the silence it replaced.
+   */
+  it("never passes the Prisma message through, because it can carry the credential", async () => {
+    signInAs(Role.PM);
+    importFirefliesCall.mockImplementation(async () => {
+      throw new Prisma.PrismaClientInitializationError(
+        "Can't reach database server at postgresql://tars:hunter2@db.internal:5432/tars",
+        "6.19.3",
+      );
+    });
+
+    const result = await importFirefliesCallAction({ dealId: "halten", meetingId: "m1" });
+
+    expect(result.ok).toBe(false);
+    const rendered = JSON.stringify(result);
+    expect(rendered).not.toContain("hunter2");
+    expect(rendered).not.toContain("postgresql://");
+    expect(rendered).not.toContain("db.internal");
+    expect(result.ok === false && result.error).toMatch(/could not be reached/i);
+  });
+
+  /**
+   * A service that already turned its own P2002 into a RuleViolation keeps that
+   * message — "call 2 already exists for this deal" is worth more than anything
+   * the generic branch could say, so the database branch has to run last.
+   */
+  it("does not override a message a service already translated", async () => {
+    signInAs(Role.PM);
+    importFirefliesCall.mockImplementation(async () => {
+      throw new RuleViolation("call 2 already exists for this deal", "number");
+    });
+
+    const result = await importFirefliesCallAction({ dealId: "halten", meetingId: "m1" });
+
+    expect(result.ok === false && result.error).toBe("call 2 already exists for this deal");
+    expect(result.ok === false && result.field).toBe("number");
+  });
+
+  /** A programmer error is still a programmer error and must not be swallowed. */
+  it("still rethrows what it does not recognise", async () => {
+    signInAs(Role.PM);
+    importFirefliesCall.mockImplementation(async () => {
+      throw new TypeError("cannot read properties of undefined");
+    });
+
+    await expect(
+      importFirefliesCallAction({ dealId: "halten", meetingId: "m1" }),
+    ).rejects.toThrow(TypeError);
   });
 });

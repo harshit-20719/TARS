@@ -16,7 +16,7 @@
 
 import { revalidatePath } from "next/cache";
 import * as z from "zod";
-import { Role } from "@prisma/client";
+import { Prisma, Role } from "@prisma/client";
 import { signOut } from "@/lib/auth";
 import { NotAuthenticated, NotAuthorized } from "@/lib/authz";
 import { requireAuthor, requireRole } from "@/lib/session";
@@ -46,9 +46,79 @@ export type ActionResult<T = undefined> =
   | ActionFailure;
 
 /**
- * Turn the failures a PM can actually cause into readable results, and let
- * everything else through — a Prisma connection failure is not a validation
- * message and should not be reported as one.
+ * Turn a database failure into a sentence, rather than into nothing.
+ *
+ * This is describeApiFailure (lib/extraction/extract.ts) applied to the other
+ * half of the write path, and it exists because the argument made there was
+ * only half-applied. `toResult` rethrows what it does not recognise, and a
+ * rethrown error reaches the browser as React's "an unexpected response was
+ * received from the server" with the message stripped — so the failure most
+ * likely to happen on a cold serverless function was also the one that said
+ * nothing at all. Extraction made that expensive rather than merely annoying:
+ * the model is called *before* the transaction, so a refused write means the
+ * tokens were already paid for and the PM is told only that something went
+ * wrong.
+ *
+ * The Prisma message is deliberately not passed through. An initialization
+ * failure quotes the connection string it could not reach, and DATABASE_URL
+ * carries the password. The error *code* is safe and is the one thing worth
+ * showing: it is what turns a support conversation into a lookup.
+ *
+ * Not exported, and it cannot be: this module is `"use server"`, where every
+ * export is compiled into a callable server action and must therefore be async.
+ * A sync helper here fails the build rather than silently shipping.
+ */
+function describeDatabaseFailure(e: unknown): string | null {
+  if (e instanceof Prisma.PrismaClientInitializationError) {
+    return "the database could not be reached, so nothing was saved.";
+  }
+  if (e instanceof Prisma.PrismaClientKnownRequestError) {
+    switch (e.code) {
+      /** Our own ceiling: the transaction could not start or did not finish in time. */
+      case "P2024":
+      case "P2028":
+        return (
+          "the database took too long to accept the write, so nothing was saved. " +
+          "The transcript is still here — try again."
+        );
+      case "P1001":
+      case "P1002":
+      case "P1008":
+      case "P1017":
+        return "the database was unreachable or too slow to answer, so nothing was saved.";
+      /**
+       * The schema the code expects is not the schema the database has, which
+       * on this project means a migration that never ran. Naming it is the
+       * difference between a five-minute fix and an afternoon.
+       */
+      case "P2021":
+      case "P2022":
+        return `the database is missing something this build expects (${e.code}) — a migration has not been applied.`;
+      default:
+        return `the database refused the write (${e.code}), so nothing was saved.`;
+    }
+  }
+  if (
+    e instanceof Prisma.PrismaClientUnknownRequestError ||
+    e instanceof Prisma.PrismaClientRustPanicError
+  ) {
+    return "the database failed in a way this app does not recognise, so nothing was saved.";
+  }
+  /**
+   * Null rather than a catch-all sentence, so PrismaClientValidationError — a
+   * malformed query, which is a code bug and not something a PM can act on —
+   * keeps falling through to the rethrow.
+   */
+  return null;
+}
+
+/**
+ * Turn the failures a PM can act on into readable results, and let genuine
+ * programmer errors through.
+ *
+ * Database failures are translated rather than rethrown — not because they are
+ * validation messages, but because the alternative is a message-less error. See
+ * describeDatabaseFailure.
  */
 function toResult(e: unknown): ActionFailure {
   if (e instanceof z.ZodError) {
@@ -77,6 +147,13 @@ function toResult(e: unknown): ActionFailure {
     return { ok: false, error: e.message, reauth: true };
   }
   if (e instanceof NotAuthorized) return { ok: false, error: e.message };
+  /**
+   * Last, so a service that already translated its own P2002 into a
+   * RuleViolation ("call 2 already exists") keeps the better message and only
+   * the failures nobody anticipated land here.
+   */
+  const db = describeDatabaseFailure(e);
+  if (db) return { ok: false, error: db };
   throw e;
 }
 

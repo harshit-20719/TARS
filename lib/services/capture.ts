@@ -592,13 +592,24 @@ export async function runExtractionForCall(
     },
     /**
      * Sized against the function's sixty-second ceiling, not chosen freely.
-     * Extraction is bounded by BLOCK_TIMEOUT_MS (30s, concurrent across blocks), so
-     * this phase gets a ceiling that keeps the worst case comfortably inside the
-     * free tier's limit — 30 + 12 — rather than requiring a paid one. The writes
-     * are batched into four queries, so twelve seconds is a failure ceiling, not an
-     * expected duration.
+     *
+     * The arithmetic that matters is the whole request, not this phase: extraction
+     * is bounded by BLOCK_TIMEOUT_MS (30s, concurrent across blocks), `maxWait` is
+     * spent *before* the transaction starts, and `timeout` bounds it once it has —
+     * so the two add rather than overlap. At 5 + 12 the worst case was 47s, and the
+     * remaining 13 had to cover a cold start, the Prisma connect, the session
+     * lookup, and the response. On a slow minute that does not fit, and the way it
+     * fails is the worst one available: the function is killed rather than
+     * returning, so no error reaches describeDatabaseFailure and the PM is told
+     * only that something went wrong.
+     *
+     * 2 + 8 puts the worst case at 40s. The writes are batched into four queries,
+     * so eight seconds is a failure ceiling and not an expected duration — and a
+     * database too slow to start a transaction in two seconds is one this run
+     * should give up on quickly and say so, rather than spend the request's
+     * remaining budget waiting for.
      */
-    { timeout: 12_000, maxWait: 5_000 },
+    { timeout: 8_000, maxWait: 2_000 },
   );
 
   return { ...result, ...written };
