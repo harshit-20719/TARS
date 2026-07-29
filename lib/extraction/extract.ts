@@ -176,14 +176,39 @@ export function describeApiFailure(e: unknown): string {
  * one. The blocks are concurrent, so the extraction phase is bounded by this single
  * number, not by six of them; adding the database phase's own ceiling
  * (see runExtractionForCall) leaves headroom under sixty seconds.
+ *
+ * That last paragraph was false until BLOCK_RETRIES existed, and the way it was
+ * false is worth keeping written down: this option bounds one *attempt*, not one
+ * block. See BLOCK_RETRIES.
  */
 export const BLOCK_TIMEOUT_MS = 30_000;
+
+/**
+ * No retries, which is the only setting that makes BLOCK_TIMEOUT_MS mean what
+ * the comment above says it means.
+ *
+ * The SDK retries twice by default, and a timeout is one of the things it
+ * retries — so `{ timeout: 30_000 }` alone bounds an attempt at thirty seconds
+ * and a block at ninety. Six concurrent blocks are still bounded by one block,
+ * but one block outran the sixty-second function ceiling on its own. The
+ * function was killed rather than returning, which is the failure with no error
+ * object and no message: the browser gets "an unexpected response was received
+ * from the server" and there is nothing to read.
+ *
+ * Retrying here was self-defeating rather than merely expensive. The whole point
+ * of the concurrent fan-out is that a bad block costs one block: the run reports
+ * it in `failedBlocks`, writes the rest, and invites a re-run. A retry that
+ * outruns the ceiling turns that partial success into a total loss — including
+ * the blocks that already answered. Failing a block at thirty seconds and saying
+ * which one is strictly better than silently losing all six.
+ */
+export const BLOCK_RETRIES = 0;
 
 export interface ExtractionClient {
   messages: {
     parse(
       params: Record<string, unknown>,
-      options?: { timeout?: number },
+      options?: { timeout?: number; maxRetries?: number },
     ): Promise<{
       /**
        * A block's output, so no `rubricKey` — the caller knows which block it
@@ -381,7 +406,10 @@ async function extractBlock(
 
   let response: Awaited<ReturnType<ExtractionClient["messages"]["parse"]>>;
   try {
-    response = await client.messages.parse(params, { timeout: BLOCK_TIMEOUT_MS });
+    response = await client.messages.parse(params, {
+      timeout: BLOCK_TIMEOUT_MS,
+      maxRetries: BLOCK_RETRIES,
+    });
   } catch (e) {
     // The one statement in this block is the API call, so everything from it is
     // an extraction failure — reported as a value the form can render instead of

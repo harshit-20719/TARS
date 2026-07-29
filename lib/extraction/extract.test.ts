@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  BLOCK_TIMEOUT_MS,
   DEFAULT_EXTRACTION_MODEL,
   ExtractionError,
   extractFromTranscript,
@@ -50,23 +51,75 @@ const obs = (o: Partial<ExtractionOutput["observations"][number]>) => ({
  */
 const ONE_BLOCK = RUBRICS[0];
 
+/**
+ * `opts` is recorded alongside `calls` because the request options are where the
+ * run's time budget lives, and nothing used to look at them — which is how a
+ * bound that did not hold stayed shipped. See "the time budget" below.
+ */
 function stub(
   result: ExtractionOutput | null,
   extra: Record<string, unknown> = {},
-): { client: ExtractionClient; calls: Record<string, unknown>[] } {
+): {
+  client: ExtractionClient;
+  calls: Record<string, unknown>[];
+  opts: ({ timeout?: number; maxRetries?: number } | undefined)[];
+} {
   const calls: Record<string, unknown>[] = [];
+  const opts: ({ timeout?: number; maxRetries?: number } | undefined)[] = [];
   return {
     calls,
+    opts,
     client: {
       messages: {
-        parse: async (params) => {
+        parse: async (params, options) => {
           calls.push(params);
+          opts.push(options);
           return { parsed_output: result, stop_reason: "end_turn", ...extra };
         },
       },
     },
   };
 }
+
+/**
+ * The run has to finish inside one serverless function call, and these two
+ * numbers are the whole of what holds it there.
+ */
+describe("the time budget", () => {
+  it("bounds each block's wait", async () => {
+    const { client, opts } = stub({ observations: [], claims: [] });
+    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, blocks: [ONE_BLOCK] });
+
+    expect(opts[0]?.timeout).toBe(BLOCK_TIMEOUT_MS);
+  });
+
+  /**
+   * The load-bearing one, and the reason the block above is not enough on its
+   * own. The SDK retries twice by default and a timeout is one of the things it
+   * retries, so a timeout alone bounds an attempt at thirty seconds and a block
+   * at ninety — past the sixty-second ceiling the whole design is sized against.
+   * When that happened the function was killed rather than returning, so no
+   * error object reached anyone and the browser showed "an unexpected response
+   * was received from the server" with nothing behind it.
+   */
+  it("disables the SDK's retries, so the wait is the block's and not one attempt's", async () => {
+    const { client, opts } = stub({ observations: [], claims: [] });
+    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, blocks: [ONE_BLOCK] });
+
+    expect(opts[0]?.maxRetries).toBe(0);
+  });
+
+  it("bounds every block in the fan-out, not just the first", async () => {
+    const { client, opts } = stub({ observations: [], claims: [] });
+    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client });
+
+    expect(opts).toHaveLength(RUBRICS.length);
+    for (const o of opts) {
+      expect(o?.timeout).toBe(BLOCK_TIMEOUT_MS);
+      expect(o?.maxRetries).toBe(0);
+    }
+  });
+});
 
 describe("the verbatim guard", () => {
   it("accepts a quote that is present", () => {
