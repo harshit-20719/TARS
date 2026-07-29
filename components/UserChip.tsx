@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import Link from "next/link";
 import { signOutAction } from "@/lib/actions";
 import type { RoleName } from "@/lib/adminEmails";
+import { personLabel } from "./ui";
 
 /**
  * Who you are signed in as, and the way out.
@@ -33,9 +34,7 @@ export function UserChip({
 }) {
   const [pending, startTransition] = useTransition();
 
-  // A blank chip reads as signed out. Google supplies a name, but the dev
-  // credentials provider and a freshly adapter-created row need not.
-  const label = name?.trim() || email.split("@")[0];
+  const label = personLabel(name, email);
 
   return (
     <div className="userchip">

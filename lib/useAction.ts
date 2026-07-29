@@ -4,6 +4,21 @@ import { useCallback, useState, useTransition } from "react";
 import type { ActionResult } from "./actions";
 
 /**
+ * What a control shows when the session ended underneath it (R23, AE10).
+ *
+ * Handled here rather than in each control so every save in the app gets it from
+ * one place. The bare `NotAuthenticated` message ("Sign in to continue.") reads
+ * as a permission complaint mid-scoring, when what actually happened is that the
+ * save was refused and the work is still on screen unsaved.
+ *
+ * It says "didn't save" and stops there because the way back is a link rather
+ * than a sentence — `components/ControlError.tsx` renders it beside this, and
+ * claiming anything about what was or was not saved beyond this one refusal
+ * would be guessing.
+ */
+export const SESSION_ENDED_MESSAGE = "Your session ended, so that didn't save.";
+
+/**
  * Call a server action from a client component.
  *
  * Wraps the call in a transition so `pending` stays true until the server has
@@ -22,21 +37,6 @@ import type { ActionResult } from "./actions";
  * on screen looking saved. Running it here binds the optimistic value to this
  * transition, so it holds until the server answers and then gives way to the truth.
  */
-/**
- * What a control shows when the session ended underneath it (R23, AE10).
- *
- * Handled here rather than in each control so every save in the app gets it from
- * one place. The bare `NotAuthenticated` message ("Sign in to continue.") reads
- * as a permission complaint mid-scoring, when what actually happened is that the
- * save was refused and the work is still on screen unsaved.
- *
- * It says "didn't save" and stops there because the way back is a link rather
- * than a sentence — `components/ControlError.tsx` renders it beside this, and
- * claiming anything about what was or was not saved beyond this one refusal
- * would be guessing.
- */
-export const SESSION_ENDED_MESSAGE = "Your session ended, so that didn't save.";
-
 export function useAction<A extends unknown[], T>(fn: (...args: A) => Promise<ActionResult<T>>) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);

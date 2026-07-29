@@ -6,17 +6,30 @@
  * this file; the services take an Actor as an argument instead.
  */
 
+import { cache } from "react";
 import { auth } from "@/lib/auth";
 import { AUTHOR_ROLES, NotAuthenticated, NotAuthorized, type Actor } from "@/lib/authz";
 import type { Role } from "@prisma/client";
 
-/** The signed-in user, or null. */
-export async function currentActor(): Promise<Actor | null> {
+/**
+ * The signed-in user, or null.
+ *
+ * Memoised per request. `auth()` is not cached by next-auth — each call builds a
+ * request, parses the cookie, verifies and decrypts the JWT, runs the `jwt` and
+ * `session` callbacks, and re-signs the rotated token. Since TopBar reads the
+ * actor and TopBar renders from the root layout, that ran on every page in the
+ * app; the deals and people pages then read it again for their own needs, doing
+ * the whole thing twice per request.
+ *
+ * React's `cache` is scoped to a single render, so this dedupes within one
+ * request and shares nothing across them.
+ */
+export const currentActor = cache(async (): Promise<Actor | null> => {
   const session = await auth();
   const user = session?.user;
   if (!user?.id || !user.email) return null;
   return { id: user.id, email: user.email, name: user.name ?? null, role: user.role };
-}
+});
 
 export async function requireActor(): Promise<Actor> {
   const actor = await currentActor();

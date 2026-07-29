@@ -60,6 +60,22 @@ export interface CoverageReading {
 const LAYER = "L1";
 
 /**
+ * The one grouping primitive. Every reading below filters first and groups here,
+ * so the three of them cannot drift apart — which matters because the difference
+ * between them is exactly which observations they keep, and that difference is
+ * the unit's whole subject.
+ */
+function groupBySubDimension(observations: Observation[]): Map<string, Observation[]> {
+  const bySub = new Map<string, Observation[]>();
+  for (const o of observations) {
+    const list = bySub.get(o.subDimensionKey);
+    if (list) list.push(o);
+    else bySub.set(o.subDimensionKey, [o]);
+  }
+  return bySub;
+}
+
+/**
  * Every observation on the record, grouped by the row it was filed under.
  *
  * Rejected ones are kept — that is the whole superset argument. Coverage needs
@@ -71,13 +87,7 @@ const LAYER = "L1";
  * render. Coverage applies its own layer filter on top.
  */
 export function observationsBySubDimension(rec: DealRecord): Map<string, Observation[]> {
-  const bySub = new Map<string, Observation[]>();
-  for (const o of rec.observations) {
-    const list = bySub.get(o.subDimensionKey);
-    if (list) list.push(o);
-    else bySub.set(o.subDimensionKey, [o]);
-  }
-  return bySub;
+  return groupBySubDimension(rec.observations);
 }
 
 /**
@@ -89,14 +99,7 @@ export function observationsBySubDimension(rec: DealRecord): Map<string, Observa
  * here.
  */
 export function candidateEvidenceBySubDimension(rec: DealRecord): Map<string, Observation[]> {
-  const bySub = new Map<string, Observation[]>();
-  for (const o of rec.observations) {
-    if (o.status === "rejected") continue;
-    const list = bySub.get(o.subDimensionKey);
-    if (list) list.push(o);
-    else bySub.set(o.subDimensionKey, [o]);
-  }
-  return bySub;
+  return groupBySubDimension(rec.observations.filter((o) => o.status !== "rejected"));
 }
 
 /** No observations at all, all of them rejected, or something still standing. */
@@ -112,12 +115,7 @@ export function coverageOf(rec: DealRecord): CoverageReading {
   // that yielded nothing still gets a column — which is itself worth seeing.
   const callNumbers = [...rec.calls.map((c) => c.number)].sort((a, b) => a - b);
 
-  const bySub = new Map<string, Observation[]>();
-  for (const o of atLayer) {
-    const list = bySub.get(o.subDimensionKey);
-    if (list) list.push(o);
-    else bySub.set(o.subDimensionKey, [o]);
-  }
+  const bySub = groupBySubDimension(atLayer);
 
   const rows: CoverageRow[] = ALL_SUBS.map((sub) => {
     const observations = bySub.get(sub.key);

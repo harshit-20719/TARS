@@ -5,6 +5,7 @@ import { useAction } from "@/lib/useAction";
 import { ControlError } from "./ControlError";
 import type { RoleName } from "@/lib/adminEmails";
 import type { Person } from "@/mock/types";
+import { personLabel } from "./ui";
 
 /**
  * One person, and the role they hold (R2, R3, R4).
@@ -61,10 +62,7 @@ export function PersonRow({
 }) {
   const setRole = useAction(setRoleAction);
 
-  // A blank cell reads as a broken row rather than as a missing name. Google
-  // supplies one; the dev credentials provider and a freshly adapter-created row
-  // need not.
-  const label = person.name?.trim() || person.email.split("@")[0];
+  const label = personLabel(person.name, person.email);
 
   /**
    * Why this row cannot be changed, or nothing.

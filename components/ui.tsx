@@ -11,3 +11,19 @@ export function ScorePill({ score, className = "" }: { score?: SubDimensionScore
 export function SlidePill({ value }: { value: number | "NE" }) {
   return <span className={`score-pill b-${slideBand(value)}`}>{value}</span>;
 }
+
+/**
+ * What to call someone on screen.
+ *
+ * A blank label reads as a broken row, or as signed-out. Google supplies a name,
+ * but the dev credentials provider and a row the adapter has just created need
+ * not — so the email's local part stands in, which is short enough for a chip and
+ * recognisable to colleagues.
+ *
+ * Distinct from the `name ?? email` fallback in `createDeal`/`reassignDeal`: that
+ * one fills a stored display field and keeps the whole address, where this is for
+ * a compact UI slot. Merging them would change what one of them renders.
+ */
+export function personLabel(name: string | null, email: string): string {
+  return name?.trim() || email.split("@")[0];
+}
