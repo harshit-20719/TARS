@@ -19,7 +19,12 @@ import { subByKey } from "@/framework";
 import { encodeScoreValue, parseRecordDate } from "@/lib/domain/codec";
 import { assertLayer, assertScoreValue } from "@/lib/domain/rules";
 import { RuleViolation } from "@/lib/domain/rules";
-import { assertMayAuthor, assertMayDeleteDeal, type Actor } from "@/lib/authz";
+import {
+  assertMayAuthor,
+  assertMayDeleteDeal,
+  assertMayReassignDeal,
+  type Actor,
+} from "@/lib/authz";
 import {
   extractFromTranscript,
   normaliseForComparison,
@@ -77,6 +82,20 @@ export async function createDeal(actor: Actor, raw: unknown) {
   return deal.id;
 }
 
+/**
+ * Everything an ordinary edit may change — which is everything except the id and
+ * the owner.
+ *
+ * The id is fixed at creation (R21): it is derived from the company name once and
+ * is a handle from then on, so a rename leaves every existing link working rather
+ * than trading a stale slug for a redirect table.
+ *
+ * The owner is absent for a permission reason. Zod strips what this schema does
+ * not declare, so an `ownerId` sent to `updateDeal` goes nowhere — which is what
+ * keeps `reassignDeal`, and therefore `assertMayReassignDeal`, the only path to a
+ * change of owner (R9). `updateDeal` only asserts authorship, which since U1
+ * refuses nobody.
+ */
 export const UpdateDealInput = CreateDealInput.partial();
 
 export async function updateDeal(actor: Actor, dealId: string, raw: unknown) {
@@ -157,6 +176,50 @@ export async function deleteDeal(actor: Actor, dealId: string) {
   if (!deal) throw new RuleViolation(`no such deal: ${dealId}`, "dealId");
   assertMayDeleteDeal(actor, deal.ownerId);
   await db.deal.delete({ where: { id: dealId } });
+}
+
+export const ReassignDealInput = z.object({
+  ownerId: z.string().trim().min(1, "Choose who should own the deal."),
+});
+
+/**
+ * Hand a deal to another account holder (R8, R9, R10).
+ *
+ * The permission is checked against who owns the deal *now*, which is what makes
+ * a handover one-way for the person performing it: the moment this write lands
+ * they are no longer the owner, so they cannot move it back. The new owner or an
+ * ADMIN can. The control says so before the second press, because a rule the
+ * reader only discovers afterwards is not a safeguard.
+ *
+ * Both representations of the owner move together. `ownerId` is the relation the
+ * permissions read; `ownerPm` is the display string the record contract carries
+ * (the `Deal` type has no `ownerId` — see mock/types.ts). Writing one without the
+ * other leaves the sidebar naming somebody who can no longer delete the deal,
+ * which is the kind of drift nothing else would catch.
+ *
+ * The target is looked up rather than trusted: the id arrives from a select in a
+ * browser, and Prisma's own foreign-key failure would surface as an infrastructure
+ * error rather than something the control can render.
+ */
+export async function reassignDeal(actor: Actor, dealId: string, raw: unknown) {
+  const input = ReassignDealInput.parse(raw);
+
+  const deal = await db.deal.findUnique({ where: { id: dealId }, select: { ownerId: true } });
+  if (!deal) throw new RuleViolation(`no such deal: ${dealId}`, "dealId");
+  assertMayReassignDeal(actor, deal.ownerId);
+
+  const target = await db.user.findUnique({
+    where: { id: input.ownerId },
+    select: { id: true, name: true, email: true },
+  });
+  if (!target) throw new RuleViolation(`no such person: ${input.ownerId}`, "ownerId");
+
+  await db.deal.update({
+    where: { id: dealId },
+    // The same fallback `createDeal` uses, so a deal that changes hands reads the
+    // way one opened by that person would.
+    data: { ownerId: target.id, ownerPm: target.name ?? target.email },
+  });
 }
 
 // --------------------------------------------------------------- extraction

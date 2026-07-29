@@ -6,10 +6,12 @@ import {
   assertMayAuthor,
   assertMayDeleteDeal,
   assertMayManageUsers,
+  assertMayReassignDeal,
   canAuthorRecord,
   canDeleteDeal,
   canManageUsers,
   canReadRecord,
+  canReassignDeal,
   NotAuthorized,
 } from "./authz";
 
@@ -107,5 +109,58 @@ describe("deleting a deal", () => {
   it("lets an ADMIN delete any deal, owned or not", () => {
     expect(canDeleteDeal(actor(Role.ADMIN, "ad"), "pm")).toBe(true);
     expect(canDeleteDeal(actor(Role.ADMIN, "ad"), null)).toBe(true);
+  });
+});
+
+describe("handing a deal over", () => {
+  it("lets the owner move their own deal", () => {
+    expect(canReassignDeal(actor(Role.PM, "pm"), "pm")).toBe(true);
+    expect(() => assertMayReassignDeal(actor(Role.PM, "pm"), "pm")).not.toThrow();
+  });
+
+  it("refuses an author who does not own the deal", () => {
+    expect(canReassignDeal(actor(Role.PM, "pm"), "other")).toBe(false);
+    expect(canReassignDeal(actor(Role.PARTNER, "pa"), "other")).toBe(false);
+    expect(() => assertMayReassignDeal(actor(Role.PM, "pm"), "other")).toThrow(NotAuthorized);
+  });
+
+  it("reserves an unowned deal for an ADMIN — nobody else can claim it", () => {
+    expect(canReassignDeal(actor(Role.PM, "pm"), null)).toBe(false);
+    expect(canReassignDeal(actor(Role.ADMIN, "ad"), null)).toBe(true);
+    expect(() => assertMayReassignDeal(actor(Role.PM, "pm"), null)).toThrow(/no owner/);
+  });
+
+  it("lets an ADMIN move a deal they do not own", () => {
+    expect(canReassignDeal(actor(Role.ADMIN, "ad"), "pm")).toBe(true);
+    expect(() => assertMayReassignDeal(actor(Role.ADMIN, "ad"), "pm")).not.toThrow();
+  });
+
+  /**
+   * R9's consequence, at the level of the rule rather than a write: the right to
+   * move a deal is held by whoever owns it *now*. So the moment a handover lands,
+   * the person who performed it can no longer undo it — which is why the control
+   * discloses that rather than relying on the reader to work it out.
+   */
+  it("travels with ownership, so the previous owner cannot take it back", () => {
+    const before = actor(Role.PM, "pm");
+    const after = actor(Role.PARTNER, "pa");
+    expect(canReassignDeal(after, "pa")).toBe(true);
+    expect(canReassignDeal(before, "pa")).toBe(false);
+  });
+
+  /**
+   * The two rules are the same rule on purpose (R9, R10), not by coincidence.
+   * Letting any author reassign would let anyone take a deal in order to delete
+   * it, which would leave the owner-scoped delete rule enforcing nothing — so a
+   * change that widened one without the other would be a hole, and this is what
+   * would notice.
+   */
+  it("is exactly as narrow as the delete rule", () => {
+    for (const role of Object.values(Role)) {
+      for (const ownerId of ["me", "someone-else", null]) {
+        const a = actor(role, "me");
+        expect(canReassignDeal(a, ownerId), `${role} / ${ownerId}`).toBe(canDeleteDeal(a, ownerId));
+      }
+    }
   });
 });

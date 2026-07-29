@@ -14,6 +14,7 @@ import {
   decideObservation,
   runExtractionForCall,
   setScore,
+  updateDeal,
 } from "./capture";
 
 const TRANSCRIPT = `[00:02] Rhea: We ran settlement operations at two clearing banks for six years.
@@ -129,6 +130,43 @@ describe("authorship is enforced on the server", () => {
 
   it("validates the input it is given", async () => {
     await expect(createDeal(pm, { company: "  ", oneLiner: "y", founders: "z" })).rejects.toThrow();
+  });
+
+  /**
+   * R21. The id is derived from the company name once, at creation, and is a
+   * handle from then on — every link into the deal, every bookmark, and every
+   * revalidated path is keyed on it. A rename that re-derived it would break all
+   * of them, and the alternative to a stale slug is a redirect table nobody wants
+   * to maintain.
+   */
+  it("keeps the id fixed when the company is renamed", async () => {
+    const dealId = await newDeal("Renameable Co");
+    expect(dealId).toBe("renameable-co");
+
+    await updateDeal(pm, dealId, { company: "Something Else Entirely" });
+
+    const row = await db.deal.findUniqueOrThrow({ where: { id: dealId } });
+    expect(row.id).toBe("renameable-co");
+    expect(row.company).toBe("Something Else Entirely");
+    // Nothing was created alongside it under a re-derived id.
+    expect(await db.deal.findUnique({ where: { id: "something-else-entirely" } })).toBeNull();
+  });
+
+  /**
+   * `updateDeal` takes `unknown` and validates at runtime, so a caller can send
+   * whatever it likes. Zod strips what the schema does not declare — which is
+   * what keeps `reassignDeal` the only path to a change of owner, and therefore
+   * the only path past `assertMayReassignDeal` (R9).
+   */
+  it("ignores an ownerId smuggled into an ordinary edit", async () => {
+    const dealId = await newDeal("Owner Smuggle Test");
+    const partnerId = partner.id;
+
+    await updateDeal(pm, dealId, { oneLiner: "Edited.", ownerId: partnerId });
+
+    const row = await db.deal.findUniqueOrThrow({ where: { id: dealId } });
+    expect(row.oneLiner).toBe("Edited.");
+    expect(row.ownerId).toBe(pm.id);
   });
 });
 

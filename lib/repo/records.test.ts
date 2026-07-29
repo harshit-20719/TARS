@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   getDeal as mockGetDeal,
   getRecord as mockGetRecord,
@@ -6,7 +6,7 @@ import {
 } from "@/mock/data";
 import type { DealRecord } from "@/mock/types";
 import { db } from "@/lib/db";
-import { getDeal, getRecord, listDeals } from "./records";
+import { getDeal, getRecord, listDeals, listReassignCandidates } from "./records";
 
 /**
  * Evidence is a set of cited observations, not a sequence — the database returns
@@ -73,6 +73,95 @@ describe("the seam returns what the front end already expects", () => {
     expect(binary.length).toBeGreaterThan(0);
     for (const s of scale) expect(s.value === "NE" || typeof s.value === "number").toBe(true);
     for (const s of binary) expect(["pass", "unv", "fail"]).toContain(s.value);
+  });
+});
+
+/**
+ * KTD9. "Mine" is a `where` clause, not a filter over an already-fetched list,
+ * so it stays correct as the deal count grows past what one page can hold.
+ *
+ * These create their own deals and remove them again — the fixture-equality
+ * assertion above reads the unfiltered list, so a stray row would break it.
+ */
+describe("filtering the deals list by owner", () => {
+  let mine: string;
+  let theirs: string;
+  let ownerId: string;
+  let otherOwnerId: string;
+
+  beforeAll(async () => {
+    const [a, b] = await Promise.all([
+      db.user.findUniqueOrThrow({ where: { email: "pm@biome.in" } }),
+      db.user.findUniqueOrThrow({ where: { email: "partner@biome.in" } }),
+    ]);
+    ownerId = a.id;
+    otherOwnerId = b.id;
+
+    const base = {
+      oneLiner: "Owner filter fixture.",
+      founders: "Test Founder",
+      opened: new Date("2026-07-25"),
+      layer: "L1" as const,
+    };
+    const [x, y] = await Promise.all([
+      db.deal.create({ data: { ...base, id: "owner-filter-mine", company: "Filter Mine", ownerPm: a.name ?? a.email, ownerId } }),
+      db.deal.create({ data: { ...base, id: "owner-filter-theirs", company: "Filter Theirs", ownerPm: b.name ?? b.email, ownerId: otherOwnerId } }),
+    ]);
+    mine = x.id;
+    theirs = y.id;
+  });
+
+  afterAll(async () => {
+    await db.deal.deleteMany({ where: { id: { in: [mine, theirs] } } });
+  });
+
+  it("returns only that owner's deals", async () => {
+    const ids = (await listDeals(ownerId)).map((d) => d.id);
+    expect(ids).toContain(mine);
+    expect(ids).not.toContain(theirs);
+    // The seeded fixtures have no owner relation at all, so none of them qualify.
+    expect(ids).not.toContain("halten");
+  });
+
+  it("returns every deal when no owner is given", async () => {
+    const ids = (await listDeals()).map((d) => d.id);
+    expect(ids).toEqual(expect.arrayContaining([mine, theirs, "halten"]));
+  });
+
+  it("returns nothing for an owner who holds no deals, rather than everything", async () => {
+    // The failure mode worth pinning: an ignored filter looks like a working page
+    // right up until someone reads a list that is not theirs.
+    expect(await listDeals("nobody-owns-anything")).toEqual([]);
+  });
+
+  it("orders a filtered list the same way it orders the whole one", async () => {
+    const filtered = await listDeals(ownerId);
+    const all = (await listDeals()).filter((d) => filtered.some((f) => f.id === d.id));
+    expect(filtered).toEqual(all);
+  });
+});
+
+/**
+ * The picker's read is deliberately narrower than `listPeople`.
+ *
+ * `listPeople` carries roles and timestamps and is reachable only from the ADMIN
+ * page. Handing a deal over needs a name to choose from and an id to send, and
+ * this control is rendered for every author — so it reads only those two.
+ */
+describe("who a deal can be handed to", () => {
+  it("returns everyone who holds an account, with something to call them by", async () => {
+    const people = await listReassignCandidates();
+    expect(people.length).toBeGreaterThanOrEqual(3);
+    const pm = people.find((p) => p.name === "Pilot PM");
+    expect(pm).toBeDefined();
+    expect(pm!.id).toBeTruthy();
+  });
+
+  it("carries no role — the control has no use for one and should not be handed it", async () => {
+    for (const person of await listReassignCandidates()) {
+      expect(person).not.toHaveProperty("role");
+      expect(Object.keys(person).sort()).toEqual(["id", "name"]);
+    }
   });
 });
 

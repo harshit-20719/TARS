@@ -175,9 +175,17 @@ const emptyFounderTypeRead = (dealId: string): FounderTypeRead => ({
 
 // ------------------------------------------------------------------ queries
 
-/** Every deal, newest first — the order the deals list renders in. */
-export async function listDeals(): Promise<Deal[]> {
+/**
+ * Every deal, newest first — the order the deals list renders in.
+ *
+ * KTD9. The optional owner filter is a `where` clause rather than something the
+ * page does to an already-fetched array, so "Mine" keeps meaning "mine" once the
+ * list outgrows one query. The seeded fixtures carry a display name and no owner
+ * relation, so they belong to nobody and appear under no filter.
+ */
+export async function listDeals(ownerId?: string): Promise<Deal[]> {
   const rows = await db.deal.findMany({
+    where: ownerId ? { ownerId } : undefined,
     include: { owner: { select: { name: true } } },
     orderBy: [{ opened: "desc" }, { id: "asc" }],
   });
@@ -291,4 +299,36 @@ export async function listPeople(): Promise<Person[]> {
     role: row.role,
     created: formatRecordDate(row.createdAt),
   }));
+}
+
+/**
+ * Someone a deal can be handed to: an id to send, and something to call them by.
+ *
+ * Its own type rather than `Person`, and declared here rather than in
+ * mock/types.ts, because it is not part of the record contract the front end is
+ * locked to — it is the shape one control needs.
+ */
+export interface ReassignCandidate {
+  id: string;
+  name: string;
+}
+
+/**
+ * Who a deal can be handed to (R8).
+ *
+ * A narrower read than `listPeople` on purpose. That one carries roles and
+ * timestamps and is reachable only from the ADMIN page; this one is rendered on
+ * every deal, for every author, so it reads the two columns the picker uses and
+ * stops. Reusing `listPeople` would have put the whole workspace's roles into the
+ * page payload of a control that has no use for them.
+ *
+ * The name falls back the same way `createDeal` and `reassignDeal` do, so the
+ * label someone picks is the one that lands in `ownerPm`.
+ */
+export async function listReassignCandidates(): Promise<ReassignCandidate[]> {
+  const rows = await db.user.findMany({
+    select: { id: true, name: true, email: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  return rows.map((row) => ({ id: row.id, name: row.name ?? row.email }));
 }

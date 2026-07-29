@@ -94,6 +94,33 @@ export async function updateDealAction(dealId: string, raw: unknown): Promise<Ac
 }
 
 /**
+ * Hand a deal to another account holder (R8, R9, R10).
+ *
+ * `requireAuthor` and not `requireRole(Role.ADMIN)`, because the rule is about
+ * ownership rather than role: the owner of a deal may move it whatever their
+ * role, and an ADMIN may move any. `reassignDeal` asserts that, which is the
+ * boundary — the control is rendered for everyone, since `ownerId` is not on the
+ * `Deal` record contract and the page has no way to know who owns it.
+ *
+ * `revalidateDeal` covers both halves of what changed: the deal page's sidebar
+ * names the owner, and /deals is where the "Mine" filter reads it — for the
+ * account losing the deal as much as the one gaining it.
+ */
+export async function reassignDealAction(
+  dealId: string,
+  ownerId: string,
+): Promise<ActionResult> {
+  try {
+    const actor = await requireAuthor();
+    await capture.reassignDeal(actor, dealId, { ownerId });
+    revalidateDeal(dealId);
+    return { ok: true };
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/**
  * Delete a deal and everything on it.
  *
  * Redirects rather than revalidating: the page the user is standing on no longer

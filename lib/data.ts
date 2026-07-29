@@ -22,11 +22,21 @@
 
 import { connection } from "next/server";
 import * as repo from "@/lib/repo/records";
+import type { ReassignCandidate } from "@/lib/repo/records";
 import type { Call, Deal, DealRecord, Person } from "@/mock/types";
 
-export async function listDeals(): Promise<Deal[]> {
+export type { ReassignCandidate };
+
+/**
+ * Every deal, or only the ones a given account holds (R7, KTD9).
+ *
+ * The filter is passed through to the query rather than applied here, so the
+ * seam stays as thin as the rest of it and "Mine" keeps working once the list is
+ * longer than one page.
+ */
+export async function listDeals(ownerId?: string): Promise<Deal[]> {
   await connection();
-  return repo.listDeals();
+  return repo.listDeals(ownerId);
 }
 
 export async function getDeal(id: string): Promise<Deal | undefined> {
@@ -61,4 +71,16 @@ export async function getCalls(dealId: string): Promise<Call[]> {
 export async function listPeople(): Promise<Person[]> {
   await connection();
   return repo.listPeople();
+}
+
+/**
+ * Who a deal can be handed to (R8).
+ *
+ * Deliberately not `listPeople`: the picker needs a name and an id, and this
+ * control renders for every author while the people page is ADMIN-only. The type
+ * travels with it so the control can import both from the seam.
+ */
+export async function listReassignCandidates(): Promise<ReassignCandidate[]> {
+  await connection();
+  return repo.listReassignCandidates();
 }

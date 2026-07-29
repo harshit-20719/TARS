@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getDeal, getRecord } from "@/lib/data";
+import { getDeal, getRecord, listReassignCandidates } from "@/lib/data";
 import { progressOf, stepsFor } from "@/lib/steps";
 import { computeRollup } from "@/lib/rollup";
 import { scoreMap } from "@/lib/judgment";
@@ -8,10 +8,21 @@ import { SlideProfile } from "@/components/SlideProfile";
 import { CaptureGrid } from "@/components/CaptureGrid";
 import { DealHeaderForm } from "@/components/authoring/DealHeaderForm";
 import { DeleteDeal } from "@/components/authoring/DeleteDeal";
+import { ReassignDeal } from "@/components/authoring/ReassignDeal";
 
 export default async function OverviewPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
-  const [deal, rec] = await Promise.all([getDeal(dealId), getRecord(dealId)]);
+  /**
+   * The candidate list is fetched for everyone, because the page cannot tell who
+   * may hand the deal over — `ownerId` is not on the `Deal` record contract, and
+   * `assertMayReassignDeal` is the boundary. It is three columns' worth of names,
+   * and it is fetched alongside the record rather than after it.
+   */
+  const [deal, rec, candidates] = await Promise.all([
+    getDeal(dealId),
+    getRecord(dealId),
+    listReassignCandidates(),
+  ]);
   if (!deal || !rec) notFound();
 
   const p = progressOf(rec);
@@ -26,6 +37,9 @@ export default async function OverviewPage({ params }: { params: Promise<{ dealI
         <p className="page-lede">{deal.oneLiner}</p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <DealHeaderForm deal={deal} />
+          {/* The owner is named in the sidebar, not here — one display, so there
+              is nothing for a second one to contradict. */}
+          <ReassignDeal dealId={deal.id} company={deal.company} candidates={candidates} />
           <DeleteDeal record={rec} />
         </div>
       </div>

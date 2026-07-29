@@ -463,6 +463,15 @@ svg.i.sm { width: 13px; height: 13px; }
 .seg button.b-unv[aria-pressed="true"] { background: var(--pending); border-color: var(--pending); color: #fff; }
 .seg button.over-cap { border-style: dashed; }
 .seg .seg-sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 5px; }
+/* The deals list's owner filter is links, not buttons — the filtering happens in
+   the query and the state lives in the URL (KTD9) — so it marks the active option
+   with aria-current rather than aria-pressed. Same control, same look. */
+.seg a { display: inline-flex; align-items: center; font-family: var(--font-data); font-size: 12.5px; font-weight: 600;
+  height: 26px; padding: 0 10px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink-2); border-radius: var(--r-ctl); text-decoration: none; transition: all 0.12s; }
+.seg a:hover { background: var(--surface-3); color: var(--ink); text-decoration: none; }
+.seg a[aria-current="page"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+.empty a { color: var(--accent); }
 
 .ctl-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ctl-row + .ctl-row { margin-top: 7px; }

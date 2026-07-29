@@ -3,8 +3,17 @@ import { Role } from "@prisma/client";
 import { L1_CAP, PILLARS, TRACKS, subByKey } from "@/framework";
 import { db } from "@/lib/db";
 import { NotAuthorized, type Actor } from "@/lib/authz";
-import { getRecord } from "@/lib/repo/records";
-import { addCall, createDeal, decideObservation, deleteCall, deleteDeal, setScore, clearScore } from "./capture";
+import { getRecord, listDeals } from "@/lib/repo/records";
+import {
+  addCall,
+  createDeal,
+  decideObservation,
+  deleteCall,
+  deleteDeal,
+  reassignDeal,
+  setScore,
+  clearScore,
+} from "./capture";
 import { setFounderTypeRead, setSlide } from "./judgment";
 
 /**
@@ -411,6 +420,136 @@ describe("deleting a deal", () => {
 
   it("reports a deal that is not there rather than succeeding quietly", async () => {
     await expect(deleteDeal(admin, "no-such-deal")).rejects.toThrow(/no such deal/);
+  });
+});
+
+describe("handing a deal over", () => {
+  /**
+   * F2, and the reason the permission is owner-or-ADMIN rather than any author
+   * (R9). These sit beside the delete tests because they are the same rule: the
+   * whole point of reassignment being narrow is that delete rights ride along
+   * with it (R10), so proving the handover without proving what it moves would
+   * miss the thing that makes it dangerous.
+   */
+
+  it("moves the owner, and refreshes the display name with it", async () => {
+    const dealId = await newDeal("Handover Naming Test");
+    await reassignDeal(pm, dealId, { ownerId: partner.id });
+
+    const row = await db.deal.findUniqueOrThrow({ where: { id: dealId } });
+    expect(row.ownerId).toBe(partner.id);
+    // `ownerPm` is the record contract's string and `ownerId` is the relation.
+    // Moving one without the other leaves the sidebar naming the old owner while
+    // the permission belongs to the new one.
+    expect(row.ownerPm).toBe(partner.name);
+  });
+
+  // AE1. Harshit owns halten, hands it to Mehul, and the delete right goes too.
+  it("takes the delete right with it — the new owner may, the previous owner may not", async () => {
+    const dealId = await newDeal("Delete Rights Move Test");
+    await expect(deleteDeal(partner, dealId)).rejects.toThrow(NotAuthorized);
+
+    await reassignDeal(pm, dealId, { ownerId: partner.id });
+
+    // Asserted in this order because the successful delete destroys the deal.
+    await expect(deleteDeal(pm, dealId)).rejects.toThrow(NotAuthorized);
+    await expect(deleteDeal(partner, dealId)).resolves.toBeUndefined();
+  });
+
+  it("refuses a PM who does not own the deal", async () => {
+    const dealId = await createDeal(admin, {
+      company: "Handover Not Mine Test", oneLiner: "x", founders: "y",
+    });
+    createdDealIds.push(dealId);
+    await expect(reassignDeal(pm, dealId, { ownerId: pm.id })).rejects.toThrow(NotAuthorized);
+    // Refused before anything is written — a rejected handover leaves no trace.
+    expect((await db.deal.findUniqueOrThrow({ where: { id: dealId } })).ownerId).toBe(admin.id);
+  });
+
+  it("lets an ADMIN move a deal they do not own", async () => {
+    const dealId = await newDeal("Admin Handover Test");
+    await expect(reassignDeal(admin, dealId, { ownerId: partner.id })).resolves.toBeUndefined();
+    expect((await db.deal.findUniqueOrThrow({ where: { id: dealId } })).ownerId).toBe(partner.id);
+  });
+
+  /**
+   * R9 strips the reassign right the instant the write lands, so the handover is
+   * recoverable — but not by the person who performed it. That is what the
+   * control's disclosure is for, and this is the behaviour it discloses.
+   */
+  it("leaves the previous owner unable to take it back", async () => {
+    const dealId = await newDeal("No Take-Backs Test");
+    await reassignDeal(pm, dealId, { ownerId: partner.id });
+    await expect(reassignDeal(pm, dealId, { ownerId: pm.id })).rejects.toThrow(NotAuthorized);
+    // The new owner can, and so can an ADMIN — recoverable, just not by them.
+    await expect(reassignDeal(partner, dealId, { ownerId: pm.id })).resolves.toBeUndefined();
+  });
+
+  it("refuses an owner id that belongs to nobody", async () => {
+    const dealId = await newDeal("Handover Ghost Test");
+    await expect(reassignDeal(pm, dealId, { ownerId: "no-such-user" })).rejects.toThrow(
+      /no such person/,
+    );
+    expect((await db.deal.findUniqueOrThrow({ where: { id: dealId } })).ownerId).toBe(pm.id);
+  });
+
+  it("refuses a blank owner rather than unowning the deal", async () => {
+    const dealId = await newDeal("Handover Blank Test");
+    await expect(reassignDeal(pm, dealId, { ownerId: "  " })).rejects.toThrow();
+    expect((await db.deal.findUniqueOrThrow({ where: { id: dealId } })).ownerId).toBe(pm.id);
+  });
+
+  it("reserves an unowned deal for an ADMIN, as deleting one is", async () => {
+    const dealId = await newDeal("Unowned Handover Test");
+    await db.deal.update({ where: { id: dealId }, data: { ownerId: null } });
+    await expect(reassignDeal(pm, dealId, { ownerId: pm.id })).rejects.toThrow(/no owner/);
+    await expect(reassignDeal(admin, dealId, { ownerId: pm.id })).resolves.toBeUndefined();
+    expect((await db.deal.findUniqueOrThrow({ where: { id: dealId } })).ownerId).toBe(pm.id);
+  });
+
+  it("reports a deal that is not there rather than succeeding quietly", async () => {
+    await expect(reassignDeal(admin, "no-such-deal", { ownerId: pm.id })).rejects.toThrow(
+      /no such deal/,
+    );
+  });
+
+  /**
+   * F2 end to end, which is the thing worth checking by hand and therefore the
+   * thing worth not checking by hand twice. The two representations are written
+   * by `reassignDeal` and read back through the repository's owner filter, so
+   * this is the only test that would notice the write and the read disagreeing.
+   */
+  it("moves the deal between both accounts' Mine filters", async () => {
+    const dealId = await newDeal("Both Sides Test");
+
+    const idsFor = async (a: Actor) => (await listDeals(a.id)).map((d) => d.id);
+    expect(await idsFor(pm)).toContain(dealId);
+    expect(await idsFor(partner)).not.toContain(dealId);
+
+    await reassignDeal(pm, dealId, { ownerId: partner.id });
+
+    expect(await idsFor(pm)).not.toContain(dealId);
+    expect(await idsFor(partner)).toContain(dealId);
+    // Still on the unfiltered list — it moved, it did not disappear.
+    expect((await listDeals()).map((d) => d.id)).toContain(dealId);
+  });
+
+  // The handover changes who owns the record, not the record itself — and not
+  // its id (R21), which every link into the deal depends on.
+  it("leaves everything recorded against the deal alone", async () => {
+    const dealId = await newDeal("Handover Keeps Record Test");
+    await addCall(pm, { dealId, number: 1, label: "First", transcript: "[00:01] F: we shipped it." });
+    await setScore(pm, { dealId, subDimensionKey: "earned-insight", value: 4 });
+
+    await reassignDeal(pm, dealId, { ownerId: partner.id });
+
+    const rec = await getRecord(dealId);
+    expect(rec!.deal.id).toBe(dealId);
+    expect(rec!.calls).toHaveLength(1);
+    expect(rec!.scores).toHaveLength(1);
+    // The score keeps the author who wrote it — attribution is not ownership.
+    const score = await db.subDimensionScore.findFirstOrThrow({ where: { dealId } });
+    expect(score.authorId).toBe(pm.id);
   });
 });
 

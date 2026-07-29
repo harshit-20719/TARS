@@ -88,6 +88,23 @@ export function assertMayManageUsers(actor: Actor): void {
 }
 
 /**
+ * Owner-or-ADMIN — the shape both of the deal-scoped permissions take.
+ *
+ * Shared rather than written twice, because the two rules being identical is a
+ * decision and not a coincidence (R9, R10). Deleting is owner-scoped; if
+ * reassignment were merely author-scoped, anyone could take a deal in order to
+ * delete it and the delete rule would enforce nothing. Widening one without the
+ * other is the hole, so there is one predicate to widen.
+ *
+ * A deal with no owner — the fixtures, which carry a display name rather than a
+ * user relation — is ADMIN-only under both: nobody can claim it.
+ */
+function ownsDealOrIsAdmin(actor: Actor, ownerId: string | null): boolean {
+  if (actor.role === Role.ADMIN) return true;
+  return canAuthorRecord(actor.role) && ownerId !== null && ownerId === actor.id;
+}
+
+/**
  * Deleting a whole deal record is a narrower permission than editing one.
  *
  * Authoring is a shared activity — any PM may score any deal, which is what makes
@@ -95,13 +112,9 @@ export function assertMayManageUsers(actor: Actor): void {
  * slide, and accepted observation with it, and there is no undo. So a PM may
  * delete a deal they own (their own practice run, a duplicate they opened by
  * mistake) and an ADMIN may delete any. A PM cannot delete someone else's work.
- *
- * A deal with no owner — the fixtures, which carry a display name rather than a
- * user relation — is ADMIN-only for the same reason: nobody can claim it.
  */
 export function canDeleteDeal(actor: Actor, ownerId: string | null): boolean {
-  if (actor.role === Role.ADMIN) return true;
-  return canAuthorRecord(actor.role) && ownerId !== null && ownerId === actor.id;
+  return ownsDealOrIsAdmin(actor, ownerId);
 }
 
 export function assertMayDeleteDeal(actor: Actor, ownerId: string | null): void {
@@ -110,6 +123,29 @@ export function assertMayDeleteDeal(actor: Actor, ownerId: string | null): void 
       ownerId === null
         ? "This deal has no owner, so only an ADMIN can delete it."
         : "You can only delete a deal you own. Ask an ADMIN to remove someone else's.",
+    );
+  }
+}
+
+/**
+ * Handing a deal to another account holder (R8, R9).
+ *
+ * The same rule as deleting, for the reason above — and with one consequence
+ * worth stating where the rule lives, because the UI has to disclose it: the
+ * right travels with the deal. The instant a handover lands, the person who
+ * performed it is no longer the owner and can no longer move it back. The
+ * handover is recoverable, just not by them.
+ */
+export function canReassignDeal(actor: Actor, ownerId: string | null): boolean {
+  return ownsDealOrIsAdmin(actor, ownerId);
+}
+
+export function assertMayReassignDeal(actor: Actor, ownerId: string | null): void {
+  if (!canReassignDeal(actor, ownerId)) {
+    throw new NotAuthorized(
+      ownerId === null
+        ? "This deal has no owner, so only an ADMIN can hand it over."
+        : "You can only hand over a deal you own. Ask its owner or an ADMIN to move it.",
     );
   }
 }
