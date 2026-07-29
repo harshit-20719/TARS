@@ -274,6 +274,23 @@ these. Set every one to **All Environments**:
 | `EXTRACTION_MODEL` | `claude-sonnet-5` | Optional — cheaper extraction |
 | `EXTRACTION_EFFORT` | `low` (the default) | Optional — raise to `medium`/`high` only if transcripts are short enough to finish inside 60s |
 
+One variable is the exception to "All Environments":
+
+| Key | Value | Environments | Needed? |
+|---|---|---|---|
+| `FIREFLIES_API_KEY` | Fireflies → **Settings** → **Developer Settings** → API key | **Production only** | Optional — without it, transcripts are pasted rather than imported |
+
+**Production only, on purpose.** Preview deployments share the production
+database (see the note at the end of this runbook), so a key present in Preview
+would let any branch build pull whole founder transcripts out of Fireflies and
+write them into the real record. Leave Preview and Development unticked.
+
+Worth knowing before you add it: Biome records every call on **one shared
+Fireflies account**, so this single key lists every call the company has ever
+recorded, and anyone who can sign in to TARS can import the full transcript of
+any of them. There is no per-person scope to apply — every meeting has the same
+host — so adding the key is that decision, not a step towards it.
+
 Do **not** add `AUTH_DEV_CREDENTIALS`. That is for local development only and is
 ignored in production builds.
 
@@ -337,6 +354,8 @@ role wiring without any UI for it.
 | Signed in, then immediately signed out | `AUTH_SECRET` missing or changed | Recheck 5b, redeploy |
 | "Access blocked" from Google | Account isn't `@biome.in` | Sign in with a Biome account |
 | The call card shows "extraction off · no ANTHROPIC_API_KEY" | The key is not set for **Production** | Settings → Environment Variables → tick Production, redeploy. `/api/health` confirms with `extractionEnabled` |
+| The transcript page offers no way to import from Fireflies | `FIREFLIES_API_KEY` is not set for **Production** | Settings → Environment Variables → add it, Production only, redeploy |
+| Importing says the Fireflies key is not valid | The key was mistyped, or revoked in Fireflies | Re-copy it from Fireflies → Settings → Developer Settings, redeploy |
 | Extraction returns "An error occurred in the Server Components render" | The function was killed at its time limit before it could return, so there is no error to report | Long transcripts need time. `maxDuration` is 60s (the free-tier ceiling); if a transcript still outruns it, set `EXTRACTION_EFFORT=low` (the default) or split the call in two |
 | Extraction runs but drops most quotes | The model paraphrased; unverifiable quotes are discarded on purpose | Open the "quotes dropped" list on the call card — it shows the text, so you can see whether it is tidying grammar. Re-run, or paste a cleaner transcript |
 | "2 of six blocks failed" after extraction | One or more of the six concurrent calls failed; the rest saved their evidence | Press Re-extract. It replaces the machine's rows and keeps anything you have ruled on. If it repeats, the named reason says why (rate limit, credit balance) |

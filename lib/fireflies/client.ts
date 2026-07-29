@@ -1,0 +1,284 @@
+/**
+ * Fireflies, reached over its GraphQL API (KTD1).
+ *
+ * Not the Fireflies MCP server: MCP needs a client and a host process to speak
+ * to, and TARS imports from server-side code on Vercel serverless where no such
+ * process exists. One authenticated fetch, no new runtime dependency.
+ *
+ * Three things this module is careful about.
+ *
+ * **The client is injected**, the way the Anthropic client is, so the suite runs
+ * with no credential and reaches no network (KTD4). Nothing here is a
+ * module-level singleton; `createFirefliesClient` is called where it is used.
+ *
+ * **The credential stays on the server** (KTD10). It is read from
+ * FIREFLIES_API_KEY — deliberately without a `NEXT_PUBLIC_` prefix, which is the
+ * one path by which Next would inline it into the browser bundle — and it never
+ * appears in a message this module throws. That is a live risk rather than a
+ * theoretical one: GraphQL reports its errors inside a 200 body, so the obvious
+ * handler is one that stringifies the response, and the request sitting next to
+ * it carries the Authorization header.
+ *
+ * **Every response is validated** before anything reads it (schema.ts), so a
+ * change at Fireflies' end fails here with a message naming the field rather
+ * than becoming an undefined that surfaces as a blank row in the picker.
+ *
+ * The list is the whole workspace, and there is nothing to narrow it with: Biome
+ * records every call on one shared account, so `host_email` is identical for
+ * every meeting (R11). Paging and search carry the entire load of finding a call.
+ */
+
+import { flattenTranscript } from "./format";
+import {
+  EnvelopeSchema,
+  MeetingListSchema,
+  MeetingSearchSchema,
+  TranscriptSchema,
+  type FirefliesMeetingWire,
+} from "./schema";
+import {
+  FirefliesError,
+  type FirefliesClient,
+  type FirefliesMeeting,
+  type ListMeetingsOptions,
+} from "./types";
+import type * as z from "zod";
+
+export const FIREFLIES_API_URL = "https://api.fireflies.ai/graphql";
+
+/** Fireflies' own ceiling on `limit`. Asking for more is an error, not a bigger page. */
+export const MAX_PAGE_SIZE = 50;
+
+/**
+ * The slice of fetch this module uses. Narrow on purpose, following the
+ * ExtractionClient precedent: a test stub is four lines rather than a mock of
+ * Request and Response.
+ */
+export type FirefliesFetch = (
+  url: string,
+  init: { method: string; headers: Record<string, string>; body: string },
+) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+
+/**
+ * What the list needs to render a meeting a PM can recognise (R22), and nothing
+ * more. The sentences are conspicuously absent: pulling every transcript's text
+ * to draw a picker would be minutes of waiting for a list of titles.
+ */
+const MEETING_FIELDS = "id title date duration participants";
+
+const LIST_QUERY = `query TarsMeetings($limit: Int!, $skip: Int!) {
+  transcripts(limit: $limit, skip: $skip) { ${MEETING_FIELDS} }
+}`;
+
+/**
+ * A search asks the same question twice in one request, because a meeting is
+ * identified by who was on it rather than by its title (R22) and the API has no
+ * single argument covering both. The two branches are merged and de-duplicated
+ * on the way out.
+ *
+ * UNVERIFIED against a live key: whether `participant_email` matches a
+ * participant's *name* as well as their address. Every documented participant
+ * filter on this query is address-shaped, so a name may match nothing here. The
+ * term is passed through to Fireflies either way — filtering server-side is the
+ * point, since the alternative is fetching the workspace and searching a page of
+ * 50 locally. If a real key shows names are unsupported, this is where it shows.
+ */
+const SEARCH_QUERY = `query TarsMeetingSearch($limit: Int!, $skip: Int!, $search: String!) {
+  byTitle: transcripts(title: $search, limit: $limit, skip: $skip) { ${MEETING_FIELDS} }
+  byParticipant: transcripts(participant_email: $search, limit: $limit, skip: $skip) { ${MEETING_FIELDS} }
+}`;
+
+const TRANSCRIPT_QUERY = `query TarsTranscript($id: String!) {
+  transcript(id: $id) { id sentences { speaker_name text } }
+}`;
+
+/**
+ * Turn a Fireflies failure into something a PM can act on.
+ *
+ * The mapping matters as much as the error class. lib/actions.ts converts typed
+ * domain failures into values and rethrows the rest, so an unrecognised error
+ * escapes the server action and React renders its generic message with the real
+ * one stripped — which is precisely where a mistyped key would land without
+ * this. The same argument is made at length in describeApiFailure
+ * (lib/extraction/extract.ts).
+ *
+ * Fireflies' own explanation is passed through because it names the problem.
+ * Nothing else from the exchange is: not the query, not the variables, and above
+ * all not the headers.
+ */
+export function describeFirefliesFailure(status: number | null, messages: string[]): string {
+  const said = messages.length ? ` Fireflies said: ${messages.join("; ")}` : "";
+
+  switch (status) {
+    case 400:
+      return `Fireflies rejected the request.${said}`;
+    case 401:
+      return `the FIREFLIES_API_KEY is not valid, so no meetings were read.${said}`;
+    case 403:
+      return `that Fireflies key is not permitted to read this workspace.${said}`;
+    case 404:
+      return `Fireflies has nothing at ${FIREFLIES_API_URL} — check the endpoint.${said}`;
+    case 429:
+      return `rate limited by Fireflies — nothing was imported, so try again in a moment.${said}`;
+    default:
+      break;
+  }
+  if (typeof status === "number") {
+    if (status >= 500) return `Fireflies is unavailable right now — try again.${said}`;
+    if (status >= 400) return `Fireflies refused the request (HTTP ${status}).${said}`;
+    // A 200 carrying an errors array, which is how GraphQL reports most refusals.
+    return `Fireflies refused the request.${said}`;
+  }
+  // No status at all: the connection failed, or fetch threw before sending.
+  return `could not reach Fireflies, so nothing was imported.${said}`;
+}
+
+function resolveApiKey(injected?: string): string {
+  const key = (injected ?? process.env.FIREFLIES_API_KEY ?? "").trim();
+  if (!key) {
+    throw new FirefliesError(
+      "FIREFLIES_API_KEY is not set — importing from Fireflies cannot run. See docs/runbooks/deploy-vercel.md.",
+    );
+  }
+  return key;
+}
+
+function messageOf(e: unknown): string {
+  const message = (e as { message?: unknown })?.message;
+  return typeof message === "string" ? message : "";
+}
+
+/**
+ * Validate one operation's payload, and name the field that did not match.
+ *
+ * The issue paths travel; the body does not. What Fireflies sent is a recording
+ * of a founder call, and this message ends up on a screen and in a log.
+ */
+function parseData<T>(schema: z.ZodType<T>, data: unknown, what: string): T {
+  const result = schema.safeParse(data);
+  if (result.success) return result.data;
+
+  const where = result.error.issues
+    .slice(0, 3)
+    .map((i) => `${i.path.join(".") || "response"}: ${i.message}`)
+    .join("; ");
+  throw new FirefliesError(`Fireflies sent a ${what} TARS could not read — ${where}`);
+}
+
+export function createFirefliesClient(
+  deps: { apiKey?: string; fetch?: FirefliesFetch } = {},
+): FirefliesClient {
+  // Resolved at construction, so a deployment with no credential fails with this
+  // rather than with whatever an unauthenticated request comes back as.
+  const apiKey = resolveApiKey(deps.apiKey);
+  const fetchImpl = deps.fetch ?? fetch;
+
+  async function graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+    let response: Awaited<ReturnType<FirefliesFetch>>;
+    try {
+      response = await fetchImpl(FIREFLIES_API_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query, variables }),
+      });
+    } catch (e) {
+      // The only statement in the block is the request, so anything thrown here
+      // is a transport failure. Only what it said travels — not what was sent.
+      throw new FirefliesError(describeFirefliesFailure(null, [messageOf(e)].filter(Boolean)));
+    }
+
+    const body = await response.json().catch(() => undefined);
+    const envelope = EnvelopeSchema.safeParse(body);
+    const messages = envelope.success
+      ? (envelope.data.errors ?? []).map((e) => e.message?.trim() ?? "").filter(Boolean)
+      : [];
+
+    if (!response.ok || messages.length) {
+      throw new FirefliesError(describeFirefliesFailure(response.status, messages));
+    }
+    if (!envelope.success) {
+      throw new FirefliesError("Fireflies sent a response that is not GraphQL at all.");
+    }
+    return envelope.data.data;
+  }
+
+  async function listMeetings(options: ListMeetingsOptions = {}): Promise<FirefliesMeeting[]> {
+    const limit = Math.min(Math.max(1, Math.trunc(options.limit ?? MAX_PAGE_SIZE)), MAX_PAGE_SIZE);
+    const skip = Math.max(0, Math.trunc(options.skip ?? 0));
+    const search = options.search?.trim() ?? "";
+
+    if (!search) {
+      const data = await graphql(LIST_QUERY, { limit, skip });
+      return parseData(MeetingListSchema, data, "meeting list").transcripts.map(toMeeting);
+    }
+
+    const data = await graphql(SEARCH_QUERY, { limit, skip, search });
+    const { byTitle, byParticipant } = parseData(MeetingSearchSchema, data, "search result");
+    return mergeBranches([...byTitle, ...byParticipant].map(toMeeting), limit);
+  }
+
+  async function fetchTranscript(meetingId: string): Promise<string> {
+    const data = await graphql(TRANSCRIPT_QUERY, { id: meetingId });
+    const { transcript } = parseData(TranscriptSchema, data, "transcript");
+
+    if (!transcript) {
+      throw new FirefliesError(`Fireflies has no meeting with the id ${meetingId}.`);
+    }
+
+    const text = flattenTranscript(transcript.sentences ?? []);
+    if (!text) {
+      /**
+       * Refused here rather than returned empty. An empty import would save as a
+       * call nobody can extract from, and the failure would surface two screens
+       * later as "cannot extract from an empty transcript" with nothing naming
+       * the cause.
+       */
+      throw new FirefliesError(
+        "that meeting has no transcript yet — Fireflies recorded it but transcribed nothing.",
+      );
+    }
+    return text;
+  }
+
+  return { listMeetings, fetchTranscript };
+}
+
+function toMeeting(m: FirefliesMeetingWire): FirefliesMeeting {
+  return {
+    id: m.id,
+    title: m.title?.trim() ?? "",
+    participants: m.participants ?? [],
+    date: toIsoDate(m.date),
+    durationMinutes: m.duration ?? null,
+  };
+}
+
+/** Fireflies dates a recording in epoch milliseconds; some responses use ISO. */
+function toIsoDate(date: number | string | null | undefined): string | null {
+  if (date === null || date === undefined) return null;
+  if (typeof date === "string") return date;
+  const parsed = new Date(date);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+/**
+ * Fold the two search branches into one list.
+ *
+ * A meeting matching on both its title and its participants comes back twice, so
+ * ids are de-duplicated. The order has to be re-established because two merged
+ * lists have none: newest first, matching how Fireflies returns an unfiltered
+ * page. The cap keeps a searched page the same size as an unsearched one — the
+ * cost is that paging a search advances both branches together, so a page
+ * boundary with 50 matches on each side is approximate.
+ */
+function mergeBranches(meetings: FirefliesMeeting[], limit: number): FirefliesMeeting[] {
+  const byId = new Map<string, FirefliesMeeting>();
+  for (const m of meetings) if (!byId.has(m.id)) byId.set(m.id, m);
+
+  return [...byId.values()]
+    .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""))
+    .slice(0, limit);
+}

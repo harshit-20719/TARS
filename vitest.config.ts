@@ -54,6 +54,10 @@ export default defineConfig({
       // Kept unset on purpose: the extraction tests inject a stub client, and a
       // real key here would let a bug reach the live API from a test run.
       ANTHROPIC_API_KEY: "",
+      // Same reasoning, and one more: the Fireflies account holds every call
+      // Biome has recorded, so a test that reached it would be reading founder
+      // transcripts from a suite run.
+      FIREFLIES_API_KEY: "",
     },
     // The database-backed suites share one Postgres database, so test files run
     // one at a time rather than racing each other's writes.
