@@ -98,17 +98,26 @@ describe("authorship is enforced on the server", () => {
     expect(row.ownerId).toBe(pm.id);
   });
 
-  it("refuses a PARTNER creating a deal", async () => {
-    await expect(
-      createDeal(partner, { company: "X", oneLiner: "y", founders: "z" }),
-    ).rejects.toThrow(NotAuthorized);
+  it("lets a PARTNER create a deal, attributed to them", async () => {
+    const id = await createDeal(partner, {
+      company: "Partner Create Test",
+      oneLiner: "y",
+      founders: "z",
+    });
+    createdDealIds.push(id);
+    const row = await db.deal.findUniqueOrThrow({ where: { id } });
+    expect(row.ownerId).toBe(partner.id);
   });
 
-  it("refuses a PARTNER scoring", async () => {
+  // AE3. Partners author on the same terms as PMs, and the record keeps saying
+  // who did the work — which is the whole reason widening the role is safe.
+  it("lets a PARTNER score, and records the partner as author", async () => {
     const dealId = await newDeal("Partner Score Test");
-    await expect(
-      setScore(partner, { dealId, subDimensionKey: "earned-insight", value: 4 }),
-    ).rejects.toThrow(NotAuthorized);
+    await setScore(partner, { dealId, subDimensionKey: "earned-insight", value: 4 });
+    const row = await db.subDimensionScore.findFirstOrThrow({
+      where: { dealId, subDimensionKey: "earned-insight" },
+    });
+    expect(row.authorId).toBe(partner.id);
   });
 
   it("derives a distinct id when company names collide", async () => {
@@ -562,11 +571,11 @@ describe("extraction persistence", () => {
     expect(anchor.rubricKey).toBe("ft");
   });
 
-  it("refuses a PARTNER running extraction", async () => {
+  it("lets a PARTNER run extraction", async () => {
     const { callId } = await seedCall("Partner Extract Test");
     await expect(
       runExtractionForCall(partner, callId, { client: stubClient({ observations: [], claims: [] }) }),
-    ).rejects.toThrow(NotAuthorized);
+    ).resolves.toBeDefined();
   });
 });
 

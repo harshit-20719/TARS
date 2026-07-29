@@ -147,9 +147,11 @@ ceiling.
 ## Rules that carry weight
 
 **The authorship rule** — the machine drafts observations and claims and
-renders every view. The PM authors every score and every slide. The app never
-judges. This is not a UI preference; it is what makes the record mean
-anything, so it is enforced on the server on every mutation.
+renders every view. A person authors every score and every slide. The app never
+judges. The line the rule protects runs between machine and human, not between
+one human role and another: PM, partner, and admin all author, and the record
+says which of them did. This is not a UI preference; it is what makes the record
+mean anything, so it is enforced on the server on every mutation.
 
 **No total, no verdict** — the framework produces facts, not a number and not
 a decision. There is no composite score and no gate pass/fail.

@@ -3,9 +3,10 @@
  * library.
  *
  * The framework's authorship rule (spec §4.4, R5) is not a UI preference — it is
- * what makes the record mean anything. The machine drafts; the PM authors every
- * score and every slide; a partner reads. So authorship is checked on the server
- * on every mutation, rather than by hiding a button.
+ * what makes the record mean anything. The machine drafts and renders; a person
+ * authors every score and every slide. The split that matters is machine versus
+ * human, not one human role versus another — so authorship is checked on the
+ * server on every mutation, rather than by hiding a button.
  *
  * This module is deliberately free of imports from lib/auth: the services check
  * permissions constantly, and making them transitively depend on next-auth would
@@ -16,8 +17,20 @@
 
 import { Role } from "@prisma/client";
 
-/** Roles permitted to author the record. A PARTNER reads at L1. */
-export const AUTHOR_ROLES: readonly Role[] = [Role.PM, Role.ADMIN];
+/**
+ * Roles permitted to author the record — every role there is.
+ *
+ * A partner authors on the same terms as a PM (R5): they take the escalated
+ * calls and their read is worth recording, and attribution rather than
+ * permission is what keeps the record honest about who did the work. So the
+ * role is a label describing who someone is, not a rule constraining them, and
+ * the product has no way to express read-only access at all.
+ *
+ * This constant is the only place that decides. `canAuthorRecord`,
+ * `assertMayAuthor`, `requireAuthor`, and `canDeleteDeal` all read it, so a
+ * future read-only role becomes an omission here rather than 24 edits.
+ */
+export const AUTHOR_ROLES: readonly Role[] = [Role.PM, Role.PARTNER, Role.ADMIN];
 
 export const canAuthorRecord = (role: Role): boolean => AUTHOR_ROLES.includes(role);
 

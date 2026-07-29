@@ -79,8 +79,10 @@ code rather than by convention:
   constraint. The line is prefilled from whichever rooted row is lowest under the
   lens, because finding that is mechanical; whether it is genuinely what holds the
   read down is not, so the slide records whether a human confirmed it.
-- **Authorship is server-side.** PM and ADMIN author; PARTNER reads. Checked on
-  every mutation, not by hiding a button.
+- **Authorship is server-side.** Every role authors — PM, PARTNER, and ADMIN
+  alike. The split the rule protects is machine versus human, not one human role
+  versus another, and it is checked on every mutation rather than by hiding a
+  button. Attribution is what keeps the record honest about who did the work.
 - **Deletion is narrower than authoring.** Any PM may score any deal — that is
   what makes a second read possible — but a PM may only delete a deal they own.
   An ADMIN may delete any. The delete cascades, so the UI asks for the company

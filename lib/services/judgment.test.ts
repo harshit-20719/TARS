@@ -169,11 +169,11 @@ describe("slides", () => {
     expect(await db.slide.count({ where: { dealId } })).toBe(0);
   });
 
-  it("refuses a PARTNER authoring a slide", async () => {
+  it("lets a PARTNER author a slide, recorded as theirs", async () => {
     const dealId = await newDeal("Partner Slide Test");
-    await expect(
-      setSlide(partner, { dealId, slideKey: "bmi", value: 4, ceilingGuard: guard }),
-    ).rejects.toThrow(NotAuthorized);
+    await setSlide(partner, { dealId, slideKey: "bmi", value: 4, ceilingGuard: guard });
+    const row = await db.slide.findFirstOrThrow({ where: { dealId, slideKey: "bmi" } });
+    expect(row.authorId).toBe(partner.id);
   });
 
   // The framework's central prohibition: a slide is a human read, never derived.
@@ -221,10 +221,10 @@ describe("the founder-type read", () => {
     expect(rows[0].primary).toBe("Serial");
   });
 
-  it("refuses a PARTNER authoring the read", async () => {
+  it("lets a PARTNER author the founder-type read, recorded as theirs", async () => {
     const dealId = await newDeal("Partner Read Test");
-    await expect(
-      setFounderTypeRead(partner, { dealId, primary: "Technical", pmConfirmation: "x" }),
-    ).rejects.toThrow(NotAuthorized);
+    await setFounderTypeRead(partner, { dealId, primary: "Technical", pmConfirmation: "x" });
+    const row = await db.founderTypeRead.findFirstOrThrow({ where: { dealId } });
+    expect(row.authorId).toBe(partner.id);
   });
 });

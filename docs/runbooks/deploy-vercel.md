@@ -283,6 +283,8 @@ ignored in production builds.
 - **Anyone else with a `@biome.in` Google account** who opens the URL signs in as
   **PM**: they can author the record (scores, slides, extraction) but cannot
   manage users. No provisioning step — they just sign in.
+- **PARTNER** authors the record on exactly the same terms as a PM. The role
+  records who someone is; it does not restrict them.
 - **Non-Biome accounts** are refused at the Google step.
 
 `ADMIN_EMAILS` takes several addresses if you want, comma-separated. Changing it
@@ -293,9 +295,9 @@ takes effect the next time that person signs in.
 > colleagues that is usually what you want; if you later need to approve
 > individuals, that is a small change.
 
-To make someone read-only instead, set their row to `PARTNER` in the database
-(see *After it's live* below). `ADMIN_EMAILS` overrides the stored role, so
-listing someone there always wins.
+There is no read-only role to put someone in instead — every role authors. If
+someone should not be in the record at all, the answer is their Google account,
+not their TARS row: see *Removing someone* below.
 
 ### 5c. Redeploy
 
@@ -353,18 +355,14 @@ do.
 **Adding another admin.** Edit `ADMIN_EMAILS` to include them, comma-separated.
 No redeploy needed for the value to be read, but they must sign out and back in.
 
-**Making someone read-only.** Everyone defaults to PM. To demote someone to
-PARTNER, they sign in once (so their row exists), then in Vercel go **Storage** →
-your database → the query editor and run:
+**Roles.** `PM` and `PARTNER` both author the record, on the same terms — the
+role says who someone is, not what they may do. `ADMIN` adds user management.
+There is no read-only role, and no way to make one from the app.
 
-```sql
-UPDATE "User" SET role = 'PARTNER' WHERE email = 'someone@biome.in';
-```
-
-Roles are `PM` (authors the record), `PARTNER` (reads only), `ADMIN` (authors,
-plus user management). Takes effect at their next sign-in. Note `ADMIN_EMAILS`
-overrides the stored role, so remove someone from that list before trying to
-demote them.
+**Removing someone.** Deleting their row in the database does **not** remove
+their access: signing in requires no pre-existing row, so they would sign in
+again and be recreated as an author. Suspend their `biome.in` Google account —
+that is the only thing that actually ends access.
 
 **Custom domain.** Settings → Domains. If you add one, go back to stage 4b and
 add a second redirect URI for the new domain.

@@ -53,8 +53,10 @@ describe("resolveRole", () => {
     expect(resolveRole("newcomer@biome.in", null)).toBe("PM");
   });
 
-  it("respects a deliberate demotion to PARTNER", () => {
-    // Someone set read-only in the database stays read-only.
+  it("keeps a role set deliberately in the database", () => {
+    // Not a demotion — a PARTNER authors the record on the same terms as a PM
+    // (R5). What this pins is that a stored role survives the next sign-in
+    // rather than being reset to the PM default.
     vi.stubEnv("ADMIN_EMAILS", "boss@biome.in");
     expect(resolveRole("reader@biome.in", "PARTNER")).toBe("PARTNER");
   });

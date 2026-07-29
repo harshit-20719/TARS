@@ -74,7 +74,9 @@ enum Lens {
   weakestLink @map("weakest-link")
 }
 
-/// PM authors the record. PARTNER reads it. ADMIN also manages users.
+/// PM and PARTNER both author the record, on the same terms — the role says who
+/// someone is, not what they may do. ADMIN also manages users. No role is
+/// read-only.
 enum Role {
   PM
   PARTNER

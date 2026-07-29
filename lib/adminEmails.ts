@@ -38,9 +38,12 @@ export function isConfiguredAdmin(email?: string | null): boolean {
  * The role a signing-in user should hold.
  *
  * Configured admins are promoted. Everyone else keeps whatever the database says,
- * defaulting to PM — so a partner demoted to read-only in the database stays
- * read-only, and a new Biome colleague signing in for the first time can author
- * the record without anyone provisioning them.
+ * defaulting to PM — so a role set deliberately in the database survives the next
+ * sign-in, and a new Biome colleague signing in for the first time can author the
+ * record without anyone provisioning them.
+ *
+ * Note that no role here is read-only: PM and PARTNER both author (R5), and they
+ * differ only in what they say about the person. ADMIN adds user management.
  */
 export function resolveRole(email: string | null | undefined, stored?: RoleName | null): RoleName {
   if (isConfiguredAdmin(email)) return "ADMIN";

@@ -391,7 +391,11 @@ describe("deleting a deal", () => {
     expect(await getRecord(dealId)).toBeUndefined();
   });
 
-  it("refuses a PARTNER outright", async () => {
+  // Not a role rule. A PARTNER authors the record (R5), so what stops this
+  // deletion is that the deal belongs to the PM — the same thing that stops one
+  // PM deleting another's. Renamed rather than inverted: the assertion still
+  // holds, but for a reason its old name got wrong.
+  it("refuses a PARTNER who does not own the deal", async () => {
     const dealId = await newDeal("Partner Delete Test");
     await expect(deleteDeal(partner, dealId)).rejects.toThrow(NotAuthorized);
   });
