@@ -570,3 +570,29 @@ svg.i.sm { width: 13px; height: 13px; }
 .drop-note p { color: var(--ink-3); font-size: 11px; margin: 6px 0 0; }
 .drop-list { margin: 6px 0 0; padding-left: 18px; color: var(--ink-2); line-height: 1.5; }
 .drop-list li { margin-bottom: 4px; }
+
+/* ---------- identity (U2) ---------- */
+.userchip { display: flex; align-items: center; gap: 8px; }
+.userchip-name {
+  font-family: var(--font-data); font-size: 12px; color: var(--ink-2);
+  max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.userchip-role {
+  font-family: var(--font-data); font-size: 10px; letter-spacing: 0.06em;
+  color: var(--ink-3); border: 1px solid var(--line); padding: 2px 6px;
+  border-radius: var(--r-ctl); text-transform: uppercase; white-space: nowrap;
+}
+.ghostbtn {
+  font-family: var(--font-data); font-size: 11px; letter-spacing: 0.04em;
+  color: var(--ink-3); background: none; border: 1px solid transparent;
+  padding: 4px 8px; border-radius: var(--r-ctl); cursor: pointer; white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.ghostbtn:hover:not(:disabled) { color: var(--ink); border-color: var(--line); background: var(--surface-3); }
+.ghostbtn:disabled { opacity: 0.6; cursor: default; }
+
+/* The chip is the first thing dropped when the bar gets tight — the brand and
+   the theme toggle stay reachable on a phone. */
+@media (max-width: 640px) {
+  .userchip-name { display: none; }
+}

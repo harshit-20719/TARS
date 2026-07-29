@@ -16,6 +16,7 @@
 
 import { revalidatePath } from "next/cache";
 import * as z from "zod";
+import { signOut } from "@/lib/auth";
 import { NotAuthenticated, NotAuthorized } from "@/lib/authz";
 import { requireAuthor } from "@/lib/session";
 import { RuleViolation } from "@/lib/domain/rules";
@@ -25,16 +26,22 @@ import * as capture from "@/lib/services/capture";
 import * as judgment from "@/lib/services/judgment";
 import type { ScoreValue } from "@/mock/types";
 
+/**
+ * A refused save. Declared once so `toResult` and `ActionResult` cannot drift —
+ * they did, the moment `reauth` was added to only one of them.
+ */
+export type ActionFailure = { ok: false; error: string; field?: string; reauth?: true };
+
 export type ActionResult<T = undefined> =
   | ({ ok: true } & (T extends undefined ? { data?: undefined } : { data: T }))
-  | { ok: false; error: string; field?: string };
+  | ActionFailure;
 
 /**
  * Turn the failures a PM can actually cause into readable results, and let
  * everything else through — a Prisma connection failure is not a validation
  * message and should not be reported as one.
  */
-function toResult(e: unknown): { ok: false; error: string; field?: string } {
+function toResult(e: unknown): ActionFailure {
   if (e instanceof z.ZodError) {
     const first = e.issues[0];
     return { ok: false, error: first?.message ?? "That input is not valid.", field: String(first?.path?.[0] ?? "") || undefined };
@@ -42,9 +49,16 @@ function toResult(e: unknown): { ok: false; error: string; field?: string } {
   if (e instanceof RuleViolation) return { ok: false, error: e.message, field: e.field };
   if (e instanceof CodecError) return { ok: false, error: e.message };
   if (e instanceof ExtractionError) return { ok: false, error: e.message };
-  if (e instanceof NotAuthorized || e instanceof NotAuthenticated) {
-    return { ok: false, error: e.message };
+  /**
+   * Flagged separately from NotAuthorized because the two need different
+   * answers. A wrong role is a fact the person cannot act on; an ended session
+   * is one they can, by signing in again — and R23 makes the second routine
+   * where it previously never happened at all.
+   */
+  if (e instanceof NotAuthenticated) {
+    return { ok: false, error: e.message, reauth: true };
   }
+  if (e instanceof NotAuthorized) return { ok: false, error: e.message };
   throw e;
 }
 
@@ -245,4 +259,20 @@ export async function setFounderTypeReadAction(raw: unknown): Promise<ActionResu
   } catch (e) {
     return toResult(e);
   }
+}
+
+// -------------------------------------------------------------------- session
+
+/**
+ * Sign out.
+ *
+ * Lives here rather than being called from the component because this module
+ * declares itself the only place auth lives, and `signOut` needs the Node-runtime
+ * half of the setup (lib/auth.ts) that the browser cannot reach.
+ *
+ * Returns nothing: `signOut` redirects, so there is no result for a caller to
+ * branch on and no cache to revalidate — the destination is the sign-in page.
+ */
+export async function signOutAction(): Promise<void> {
+  await signOut({ redirectTo: "/" });
 }

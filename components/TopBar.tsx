@@ -1,7 +1,18 @@
 import Link from "next/link";
+import { currentActor } from "@/lib/session";
 import { ThemeToggle } from "./ThemeToggle";
+import { UserChip } from "./UserChip";
 
-export function TopBar() {
+/**
+ * Rendered from app/layout.tsx, so making it async is what puts identity on
+ * every screen at once (R1).
+ *
+ * The actor can be null on the sign-in page, which layout also wraps — the chip
+ * is simply absent there rather than rendering an empty shape.
+ */
+export async function TopBar() {
+  const actor = await currentActor();
+
   return (
     <header className="topbar">
       <Link href="/deals" className="brand" style={{ textDecoration: "none" }}>
@@ -11,6 +22,7 @@ export function TopBar() {
         <span className="brand-sub">Conviction · L1</span>
       </Link>
       <div className="topbar-spacer" />
+      {actor && <UserChip name={actor.name} email={actor.email} role={actor.role} />}
       <ThemeToggle />
     </header>
   );

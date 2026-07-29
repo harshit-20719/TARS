@@ -22,23 +22,38 @@ import type { ActionResult } from "./actions";
  * on screen looking saved. Running it here binds the optimistic value to this
  * transition, so it holds until the server answers and then gives way to the truth.
  */
+/**
+ * What a control shows when the session ended underneath it (R23, AE10).
+ *
+ * Handled here rather than in each control so every save in the app gets it
+ * from one place. The bare `NotAuthenticated` message ("Sign in to continue.")
+ * reads as a permission complaint mid-scoring; this says what actually happened
+ * and what to do about it. Reloading is the way back: middleware sends any
+ * navigation without a session to the sign-in page.
+ */
+export const SESSION_ENDED_MESSAGE =
+  "Your session ended. Reload this page to sign in again — your work so far is saved.";
+
 export function useAction<A extends unknown[], T>(fn: (...args: A) => Promise<ActionResult<T>>) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [field, setField] = useState<string | undefined>(undefined);
+  const [reauth, setReauth] = useState(false);
 
   const runWith = useCallback(
     (optimistic: (() => void) | undefined, ...args: A) =>
       new Promise<ActionResult<T>>((resolve, reject) => {
         setError(null);
         setField(undefined);
+        setReauth(false);
         startTransition(async () => {
           optimistic?.();
           try {
             const result = await fn(...args);
             if (!result.ok) {
-              setError(result.error);
+              setError(result.reauth ? SESSION_ENDED_MESSAGE : result.error);
               setField(result.field);
+              setReauth(result.reauth === true);
             }
             resolve(result);
           } catch (e) {
@@ -55,5 +70,14 @@ export function useAction<A extends unknown[], T>(fn: (...args: A) => Promise<Ac
 
   const run = useCallback((...args: A) => runWith(undefined, ...args), [runWith]);
 
-  return { run, runWith, pending, error, field, clearError: () => setError(null) };
+  return {
+    run,
+    runWith,
+    pending,
+    error,
+    field,
+    /** True when the failure was an ended session rather than a refused input. */
+    reauth,
+    clearError: () => setError(null),
+  };
 }
