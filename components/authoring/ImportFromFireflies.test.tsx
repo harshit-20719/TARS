@@ -103,6 +103,14 @@ const press = (label: string | RegExp) =>
     screen.getByRole("button", { name: label }).click();
   });
 
+const choose = (labelText: RegExp, value: string) =>
+  act(async () => {
+    const select = screen.getByLabelText(labelText) as HTMLSelectElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+    setter.call(select, value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
 const type = (labelText: RegExp, value: string) =>
   act(async () => {
     const input = screen.getByLabelText(labelText) as HTMLInputElement;
@@ -154,9 +162,18 @@ describe("what the picker says about its own reach", () => {
     const reach = screen.getByText(/every call biome has recorded/i).parentElement!;
     expect(reach.textContent).toMatch(/single fireflies account for the whole firm/i);
     expect(reach.textContent).toMatch(/not your meetings/i);
-    // A scope would be a select; the only field on the panel is the search box.
-    expect(screen.queryByRole("combobox")).toBeNull();
-    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    /**
+     * There are selects on the panel now — match, date range, sort, page size —
+     * so counting them proves nothing. What must stay true is that none of them
+     * offers a *whose meetings* choice, because no such filter exists: one
+     * shared account means host_email is identical for every meeting (R11).
+     */
+    const options = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+    expect(options.length).toBeGreaterThan(0);
+    for (const label of options) {
+      expect(label).not.toMatch(/\bmy\b|\bmine\b|everyone|colleague|owner|host/i);
+    }
+    expect(screen.queryByLabelText(/whose|scope|owner/i)).toBeNull();
   });
 
   it("names who will be recorded against the import", async () => {
@@ -193,7 +210,7 @@ describe("the five states", () => {
     listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [], hasMore: false } });
 
     await type(/search/i, "aparna");
-    await press(/^search$/i);
+    await press(/apply/i);
 
     expect(screen.getByText(/no meeting matches “aparna”/i)).toBeTruthy();
 
@@ -238,7 +255,7 @@ describe("the five states", () => {
       error: "the FIREFLIES_API_KEY is not valid, so no meetings were read.",
     });
     await type(/search/i, "aparna");
-    await press(/^search$/i);
+    await press(/apply/i);
     expect(screen.getByText(/the FIREFLIES_API_KEY is not valid/)).toBeTruthy();
 
     listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [FOUNDER_CALL], hasMore: false } });
@@ -246,7 +263,15 @@ describe("the five states", () => {
 
     // Not { search: undefined, skip: 0 } — that would be the blank browse the
     // list last successfully loaded with, silently dropping "aparna".
-    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({ search: "aparna", skip: 0 });
+    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({
+      search: "aparna",
+      fromDate: undefined,
+      toDate: undefined,
+      searchField: "both",
+      sort: "newest",
+      limit: 50,
+      skip: 0,
+    });
   });
 
   /**
@@ -262,7 +287,15 @@ describe("the five states", () => {
     listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [FOUNDER_CALL], hasMore: false } });
     await press(/load the next 50/i);
 
-    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({ search: undefined, skip: 50 });
+    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({
+      search: undefined,
+      fromDate: undefined,
+      toDate: undefined,
+      searchField: "both",
+      sort: "newest",
+      limit: 50,
+      skip: 50,
+    });
     // Appended, not replaced — paging forward must not lose the page above it.
     expect(screen.getAllByRole("listitem")).toHaveLength(51);
     // And a short page is the end of it, so the offer goes away.
@@ -317,10 +350,15 @@ describe("identifying the right meeting", () => {
     listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [FOUNDER_CALL], hasMore: false } });
 
     await type(/search/i, "aparna@halten.com");
-    await press(/^search$/i);
+    await press(/apply/i);
 
     expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({
       search: "aparna@halten.com",
+      fromDate: undefined,
+      toDate: undefined,
+      searchField: "both",
+      sort: "newest",
+      limit: 50,
       skip: 0,
     });
   });
@@ -343,14 +381,18 @@ describe("narrowing by when a call was recorded", () => {
   it("sends both bounds to Fireflies, and resets to the first page", async () => {
     await open([FOUNDER_CALL]);
 
-    await type(/recorded between/i, "2026-07-01");
-    await type(/^and$/i, "2026-07-31");
+    await choose(/recorded/i, "custom");
+    await type(/^from$/i, "2026-07-01");
+    await type(/^to$/i, "2026-07-31");
     await press(/apply/i);
 
     expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({
       search: undefined,
       fromDate: "2026-07-01",
       toDate: "2026-07-31",
+      searchField: "both",
+      sort: "newest",
+      limit: 50,
       skip: 0,
     });
   });
@@ -359,13 +401,17 @@ describe("narrowing by when a call was recorded", () => {
     await open([FOUNDER_CALL]);
 
     await type(/search/i, "aparna");
-    await type(/recorded between/i, "2026-07-01");
+    await choose(/recorded/i, "custom");
+    await type(/^from$/i, "2026-07-01");
     await press(/apply/i);
 
     expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith({
       search: "aparna",
       fromDate: "2026-07-01",
       toDate: undefined,
+      searchField: "both",
+      sort: "newest",
+      limit: 50,
       skip: 0,
     });
   });
@@ -374,8 +420,9 @@ describe("narrowing by when a call was recorded", () => {
     await open([FOUNDER_CALL]);
     listFirefliesMeetingsAction.mockResolvedValue({ ok: true, data: { meetings: [], hasMore: false } });
 
-    await type(/recorded between/i, "2026-01-01");
-    await type(/^and$/i, "2026-01-31");
+    await choose(/recorded/i, "custom");
+    await type(/^from$/i, "2026-01-01");
+    await type(/^to$/i, "2026-01-31");
     await press(/apply/i);
 
     expect(screen.getByText(/between 2026-01-01 and 2026-01-31/i)).toBeTruthy();
@@ -386,7 +433,8 @@ describe("narrowing by when a call was recorded", () => {
     await open([FOUNDER_CALL]);
 
     await type(/search/i, "aparna");
-    await type(/recorded between/i, "2026-07-01");
+    await choose(/recorded/i, "custom");
+    await type(/^from$/i, "2026-07-01");
     await press(/apply/i);
     await press(/clear filters/i);
 
@@ -394,8 +442,131 @@ describe("narrowing by when a call was recorded", () => {
       search: undefined,
       fromDate: undefined,
       toDate: undefined,
+      searchField: "both",
+      sort: "newest",
+      limit: 50,
       skip: 0,
     });
+  });
+});
+
+describe("the filter dropdowns", () => {
+  it("narrows the search to one field when asked", async () => {
+    await open([FOUNDER_CALL]);
+
+    await type(/search/i, "aparna");
+    await choose(/match/i, "participants");
+    await press(/apply/i);
+
+    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: "aparna", searchField: "participants" }),
+    );
+  });
+
+  it("asks for oldest first when the sort is flipped", async () => {
+    await open([FOUNDER_CALL]);
+
+    await choose(/sort/i, "oldest");
+    await press(/apply/i);
+
+    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: "oldest" }),
+    );
+  });
+
+  it("asks for the chosen page size, and pages by it rather than by 50", async () => {
+    await open(page(10), { hasMore: true });
+
+    await choose(/show/i, "10");
+    await press(/apply/i);
+    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: 10, skip: 0 }),
+    );
+
+    await press(/load the next/i);
+    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: 10, skip: 10 }),
+    );
+  });
+
+  /**
+   * The preset resolves to a bound at fetch time rather than when it is picked,
+   * so "last 7 days" still means seven days from now on a panel left open. What
+   * is pinned here is the shape — a from-bound is sent, no to-bound is — since
+   * asserting the literal date would pin the clock instead.
+   */
+  it("turns a preset into a from-bound with no ceiling", async () => {
+    await open([FOUNDER_CALL]);
+
+    await choose(/recorded/i, "7d");
+    await press(/apply/i);
+
+    const sent = listFirefliesMeetingsAction.mock.lastCall![0]!;
+    expect(sent.fromDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(sent.toDate).toBeUndefined();
+  });
+
+  it("sends no bound at all for Any time", async () => {
+    await open([FOUNDER_CALL]);
+
+    await choose(/recorded/i, "30d");
+    await press(/apply/i);
+    await choose(/recorded/i, "any");
+    await press(/apply/i);
+
+    expect(listFirefliesMeetingsAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fromDate: undefined, toDate: undefined }),
+    );
+  });
+
+  it("only offers the two date boxes once a custom range is chosen", async () => {
+    await open([FOUNDER_CALL]);
+    expect(screen.queryByLabelText(/^from$/i)).toBeNull();
+
+    await choose(/recorded/i, "custom");
+    expect(screen.getByLabelText(/^from$/i)).toBeTruthy();
+    expect(screen.getByLabelText(/^to$/i)).toBeTruthy();
+  });
+});
+
+describe("getting the panel out of the way", () => {
+  /**
+   * The disclosure, four filters, a page of rows and the import form make this
+   * the longest thing on the page — and the paste form lives under it. Closing
+   * is what keeps the rest of the screen reachable.
+   */
+  it("closes the panel and leaves the paste form below it working", async () => {
+    await open([FOUNDER_CALL]);
+    expect(screen.getByText("Biome <> Aparna")).toBeTruthy();
+
+    await press(/^close$/i);
+
+    expect(screen.queryByText("Biome <> Aparna")).toBeNull();
+    expect(screen.queryByLabelText(/^search$/i)).toBeNull();
+    // The way back in is the same control it always was.
+    expect(screen.getByRole("button", { name: /browse meetings/i })).toBeTruthy();
+  });
+
+  it("re-opens on what was already fetched rather than spending another request", async () => {
+    await open([FOUNDER_CALL]);
+    const callsAfterFirstOpen = listFirefliesMeetingsAction.mock.calls.length;
+
+    await press(/^close$/i);
+    await press(/browse meetings/i);
+
+    expect(listFirefliesMeetingsAction.mock.calls).toHaveLength(callsAfterFirstOpen);
+    expect(screen.getByText("Biome <> Aparna")).toBeTruthy();
+  });
+
+  it("keeps a chosen meeting through a close and re-open", async () => {
+    await open([FOUNDER_CALL]);
+    await press(/biome <> aparna/i);
+    expect(screen.getByText(/importing/i)).toBeTruthy();
+
+    await press(/^close$/i);
+    await press(/browse meetings/i);
+
+    expect(screen.getByText(/importing/i)).toBeTruthy();
   });
 });
 

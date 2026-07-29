@@ -54,10 +54,31 @@ export interface ListMeetingsOptions {
    */
   fromDate?: string;
   toDate?: string;
+  /**
+   * Which side of the search to run.
+   *
+   * `both` is the default and the reason paging is approximate: it runs two
+   * filtered selections and merges them, so neither branch's count survives to
+   * the caller. Narrowing to one branch makes the page exact — one selection,
+   * one count — which is why this is worth offering rather than hiding.
+   */
+  searchField?: SearchField;
+  /**
+   * Orders the page that came back, **not** the archive.
+   *
+   * Fireflies decides which meetings land in a page; this decides how they read
+   * once they have. Asking for oldest-first does not walk the archive backwards,
+   * and the picker says so rather than implying it.
+   */
+  sort?: SortOrder;
   /** Capped at MAX_PAGE_SIZE, which is Fireflies' own limit. */
   limit?: number;
   skip?: number;
 }
+
+export type SearchField = "both" | "title" | "participants";
+
+export type SortOrder = "newest" | "oldest";
 
 /**
  * One page of meetings, and whether asking again could return more.

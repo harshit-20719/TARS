@@ -229,6 +229,13 @@ const ListMeetingsRequest = z.object({
    */
   fromDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.").optional(),
   toDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.").optional(),
+  /**
+   * Enums rather than free strings: both reach the client as behaviour, and one
+   * of them (`searchField`) decides which GraphQL argument the term is sent as.
+   * A value outside the set is a caller error, refused here.
+   */
+  searchField: z.enum(["both", "title", "participants"]).optional(),
+  sort: z.enum(["newest", "oldest"]).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
   skip: z.coerce.number().int().min(0).optional(),
 });
@@ -257,11 +264,14 @@ export async function listFirefliesMeetingsAction(
 ): Promise<ActionResult<MeetingPage>> {
   try {
     const actor = await requireAuthor();
-    const { search, fromDate, toDate, limit, skip } = ListMeetingsRequest.parse(raw);
+    const { search, fromDate, toDate, searchField, sort, limit, skip } =
+      ListMeetingsRequest.parse(raw);
     const page = await importing.listFirefliesMeetings(actor, {
       search,
       fromDate,
       toDate,
+      searchField,
+      sort,
       limit,
       skip,
     });

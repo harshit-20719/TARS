@@ -665,9 +665,18 @@ svg.i.sm { width: 13px; height: 13px; }
 }
 .ff-reach b { color: var(--ink); font-weight: 580; }
 .ff-note { font-size: 11.5px; color: var(--ink-3); margin: 6px 0 0; }
-.ff-search { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ff-search label { font-size: 12px; color: var(--ink-2); }
-.ff-search .inp { flex: 1; min-width: 220px; }
+/* The filter bar. Wraps rather than scrolls, and every control keeps its label
+   attached to it, so a narrow window stacks them in readable pairs instead of
+   orphaning a row of unlabelled selects. */
+.ff-filters { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.ff-filter { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+/* The search box takes whatever the selects leave, down to a floor where the
+   placeholder still reads. */
+.ff-filter.grow { flex: 1 1 240px; }
+.ff-filter.actions { flex-direction: row; align-items: center; gap: 8px; margin-left: auto; }
+.ff-filter label { font-size: 11px; color: var(--ink-2); letter-spacing: 0.01em; }
+.ff-filter select.inp { padding-right: 26px; }
+.ff-filter .inp.narrow { width: auto; min-width: 76px; }
 /* Pending, failed, and both empties all land here, so they occupy the same
    vertical space and the list does not jump as the state changes. */
 .ff-state { display: flex; align-items: center; gap: 10px; margin-top: 14px; }

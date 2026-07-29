@@ -42,6 +42,7 @@ import {
   type FirefliesMeeting,
   type ListMeetingsOptions,
   type MeetingPage,
+  type SortOrder,
 } from "./types";
 import type * as z from "zod";
 
@@ -123,10 +124,24 @@ function dateClauses(o: { fromDate?: string; toDate?: string }): {
   };
 }
 
-function listQuery(o: { fromDate?: string; toDate?: string }): string {
+/**
+ * One selection, under Fireflies' own `transcripts` key.
+ *
+ * Serves the unfiltered list and both single-field searches, because they are
+ * the same request with one argument's difference — and because a single
+ * selection is the shape whose row count means something. A page from here is
+ * exact: `rows.length === limit` genuinely answers "is there more", which the
+ * two-branch merge below cannot.
+ */
+function oneBranchQuery(
+  o: { fromDate?: string; toDate?: string },
+  filterArg?: "title" | "participant_email",
+): string {
   const { decl, args } = dateClauses(o);
-  return `query TarsMeetings($limit: Int!, $skip: Int!${decl}) {
-  transcripts(limit: $limit, skip: $skip${args}) { ${MEETING_FIELDS} }
+  const searchDecl = filterArg ? ", $search: String!" : "";
+  const searchArg = filterArg ? `, ${filterArg}: $search` : "";
+  return `query TarsMeetings($limit: Int!, $skip: Int!${searchDecl}${decl}) {
+  transcripts(limit: $limit, skip: $skip${searchArg}${args}) { ${MEETING_FIELDS} }
 }`;
 }
 
@@ -312,6 +327,8 @@ export function createFirefliesClient(
     const limit = Math.min(Math.max(1, Math.trunc(options.limit ?? MAX_PAGE_SIZE)), MAX_PAGE_SIZE);
     const skip = Math.max(0, Math.trunc(options.skip ?? 0));
     const search = options.search?.trim() ?? "";
+    const field = options.searchField ?? "both";
+    const sort = options.sort ?? "newest";
     const bounds = { fromDate: options.fromDate?.trim(), toDate: options.toDate?.trim() };
     const vars = {
       limit,
@@ -320,17 +337,28 @@ export function createFirefliesClient(
       ...(bounds.toDate ? { toDate: bounds.toDate } : {}),
     };
 
-    if (!search) {
-      const data = await graphql(listQuery(bounds), vars);
+    /**
+     * Three of the four cases are one selection, and only the fourth has to
+     * merge. Narrowing the search to a single field is not just fewer results —
+     * it is the version of this request whose paging is exact, because one
+     * selection's row count survives to the caller intact.
+     */
+    const single =
+      !search ? oneBranchQuery(bounds)
+      : field === "title" ? oneBranchQuery(bounds, "title")
+      : field === "participants" ? oneBranchQuery(bounds, "participant_email")
+      : null;
+
+    if (single) {
+      const data = await graphql(single, search ? { ...vars, search } : vars);
       const rows = parseData(MeetingListSchema, data, "meeting list").transcripts;
-      // One branch, so a full page is the whole of the question.
-      return { meetings: rows.map(toMeeting), hasMore: rows.length === limit };
+      return { meetings: order(rows.map(toMeeting), sort), hasMore: rows.length === limit };
     }
 
     const data = await graphql(searchQuery(bounds), { ...vars, search });
     const { byTitle, byParticipant } = parseData(MeetingSearchSchema, data, "search result");
     return {
-      meetings: mergeBranches([...byTitle, ...byParticipant].map(toMeeting)),
+      meetings: order(mergeBranches([...byTitle, ...byParticipant].map(toMeeting)), sort),
       /**
        * Either branch coming back full means Fireflies still has matches behind
        * it, whatever the merged count looks like. Reading the merged length
@@ -390,9 +418,8 @@ function toIsoDate(date: number | string | null | undefined): string | null {
  * Fold the two search branches into one list.
  *
  * A meeting matching on both its title and its participants comes back twice, so
- * ids are de-duplicated. The order has to be re-established because two merged
- * lists have none: newest first, matching how Fireflies returns an unfiltered
- * page.
+ * ids are de-duplicated. Ordering is left to `order` — two merged lists have no
+ * order of their own, and one function deciding it beats two.
  *
  * Deliberately **not** capped to the page size. Trimming the union threw away
  * meetings Fireflies had already found and returned — and the caller pages by
@@ -400,9 +427,29 @@ function toIsoDate(date: number | string | null | undefined): string | null {
  * Handing back up to twice the page size beats silently losing a match in an
  * archive where search is the only way to find anything.
  */
+/**
+ * Order the page that came back — and only that page.
+ *
+ * Fireflies decides which meetings land in a page; this decides how they read
+ * once they have. "Oldest first" therefore means the oldest of what was
+ * fetched, not the oldest recording Biome holds, and the picker says so rather
+ * than implying it walks the archive backwards. Undated meetings sort last
+ * either way: a missing date is not a very old one.
+ */
+function order(meetings: FirefliesMeeting[], sort: SortOrder): FirefliesMeeting[] {
+  const dated = meetings.filter((m) => m.date);
+  const undated = meetings.filter((m) => !m.date);
+  dated.sort((a, b) =>
+    sort === "newest"
+      ? (b.date ?? "").localeCompare(a.date ?? "")
+      : (a.date ?? "").localeCompare(b.date ?? ""),
+  );
+  return [...dated, ...undated];
+}
+
 function mergeBranches(meetings: FirefliesMeeting[]): FirefliesMeeting[] {
   const byId = new Map<string, FirefliesMeeting>();
   for (const m of meetings) if (!byId.has(m.id)) byId.set(m.id, m);
 
-  return [...byId.values()].sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  return [...byId.values()];
 }

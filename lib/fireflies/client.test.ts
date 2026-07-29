@@ -437,3 +437,93 @@ describe("bounding how long Fireflies may take", () => {
     expect(FIREFLIES_TIMEOUT_MS).toBe(30_000);
   });
 });
+
+/**
+ * Narrowing the search to one field.
+ *
+ * Not only fewer results — it is the version of the request whose paging is
+ * exact. One selection's row count survives to the caller; the merge of two
+ * does not, which is why `both` can only ever answer "is there more" from the
+ * branches rather than from what it hands back.
+ */
+describe("choosing which side of the search to run", () => {
+  it("runs both branches by default, as R22 asks", async () => {
+    const { fetch, sent } = stub([{ data: { byTitle: [], byParticipant: [] } }]);
+    await client(fetch).listMeetings({ search: "aparna" });
+
+    expect(sent[0].query).toMatch(/byTitle: transcripts\(title: \$search/);
+    expect(sent[0].query).toMatch(/byParticipant: transcripts\(participant_email: \$search/);
+  });
+
+  it("sends one selection for a title-only search, and no participant branch", async () => {
+    const { fetch, sent } = stub([{ data: { transcripts: [meeting()] } }]);
+    const p = await client(fetch).listMeetings({ search: "halten", searchField: "title" });
+
+    expect(sent[0].query).toMatch(/transcripts\(limit: \$limit, skip: \$skip, title: \$search\)/);
+    expect(sent[0].query).not.toMatch(/participant_email/);
+    expect(sent[0].variables.search).toBe("halten");
+    expect(p.meetings).toHaveLength(1);
+  });
+
+  it("sends one selection for a participants-only search, and no title branch", async () => {
+    const { fetch, sent } = stub([{ data: { transcripts: [meeting()] } }]);
+    await client(fetch).listMeetings({ search: "aparna", searchField: "participants" });
+
+    expect(sent[0].query).toMatch(/participant_email: \$search/);
+    expect(sent[0].query).not.toMatch(/title: \$search/);
+  });
+
+  it("answers hasMore exactly for a single-field search", async () => {
+    const rows = [meeting({ id: "a" }), meeting({ id: "b" })];
+    const { fetch } = stub([{ data: { transcripts: rows } }]);
+    const p = await client(fetch).listMeetings({ search: "x", searchField: "title", limit: 2 });
+
+    // One branch, one count — no merge to blur it.
+    expect(p.hasMore).toBe(true);
+  });
+
+  it("still applies the date bounds to a single-field search", async () => {
+    const { fetch, sent } = stub([{ data: { transcripts: [] } }]);
+    await client(fetch).listMeetings({
+      search: "aparna",
+      searchField: "title",
+      fromDate: "2026-07-01",
+    });
+
+    expect(sent[0].query).toMatch(/fromDate: \$fromDate/);
+    expect(sent[0].variables.fromDate).toBe("2026-07-01");
+  });
+});
+
+describe("ordering the page that came back", () => {
+  const older = meeting({ id: "older", date: "2026-01-05T00:00:00.000Z" });
+  const newer = meeting({ id: "newer", date: "2026-07-05T00:00:00.000Z" });
+
+  it("puts the newest first by default", async () => {
+    const { fetch } = stub([{ data: { transcripts: [older, newer] } }]);
+    const p = await client(fetch).listMeetings();
+    expect(p.meetings.map((m) => m.id)).toEqual(["newer", "older"]);
+  });
+
+  it("reverses when asked for oldest first", async () => {
+    const { fetch } = stub([{ data: { transcripts: [newer, older] } }]);
+    const p = await client(fetch).listMeetings({ sort: "oldest" });
+    expect(p.meetings.map((m) => m.id)).toEqual(["older", "newer"]);
+  });
+
+  it("orders a merged search too, so both branches read as one list", async () => {
+    const { fetch } = stub([{ data: { byTitle: [older], byParticipant: [newer] } }]);
+    const p = await client(fetch).listMeetings({ search: "x", sort: "oldest" });
+    expect(p.meetings.map((m) => m.id)).toEqual(["older", "newer"]);
+  });
+
+  /** A missing date is not a very old one, so it sorts last either way. */
+  it("keeps undated meetings at the end whichever way it is sorted", async () => {
+    const undated = meeting({ id: "undated", date: null });
+    for (const sort of ["newest", "oldest"] as const) {
+      const { fetch } = stub([{ data: { transcripts: [undated, older, newer] } }]);
+      const p = await client(fetch).listMeetings({ sort });
+      expect(p.meetings.at(-1)!.id, sort).toBe("undated");
+    }
+  });
+});

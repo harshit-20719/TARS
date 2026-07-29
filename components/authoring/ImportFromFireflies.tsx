@@ -36,39 +36,110 @@ import type { FirefliesMeeting } from "@/lib/fireflies/types";
  */
 
 /**
- * Fireflies' own page size (MAX_PAGE_SIZE in lib/fireflies/client.ts), repeated
- * rather than imported: that module reads the credential at construction, and
- * importing it from a client component is how a server-only module ends up in
- * the browser bundle.
+ * The page sizes on offer. 50 is Fireflies' own ceiling (MAX_PAGE_SIZE in
+ * lib/fireflies/client.ts), repeated rather than imported: that module reads the
+ * credential at construction, and importing it from a client component is how a
+ * server-only module ends up in the browser bundle.
+ *
+ * A smaller page is not a cheaper request — Fireflies is asked once either way —
+ * it is a shorter panel, which is the whole point of offering it.
  */
-const PAGE_SIZE = 50;
+const PAGE_SIZES = [10, 25, 50] as const;
 
 /**
- * The three ways to narrow the list, carried together.
+ * Everything that decides what comes back, carried as one object.
  *
- * One object rather than three pieces of state because they are always applied
- * as a set: every fetch sends all three, and "what is on screen" is only
- * meaningful as the whole combination. Keeping them apart invited the bug where
- * a cleared search still carried the old dates.
+ * One value rather than six pieces of state because they are always applied as a
+ * set: every fetch sends all of them, and "what is on screen" is only meaningful
+ * as the whole combination. Keeping them apart invited the bug where a cleared
+ * search still carried the old dates.
  */
 interface Filter {
   search: string;
+  /** UI-only. Resolves to the two bounds below; `custom` is when they are typed. */
+  preset: Preset;
   /** `YYYY-MM-DD`, which is what a date input produces and what the action takes. */
   fromDate: string;
   toDate: string;
+  searchField: SearchField;
+  sort: SortOrder;
+  limit: number;
 }
 
-const NO_FILTER: Filter = { search: "", fromDate: "", toDate: "" };
+type Preset = "any" | "7d" | "30d" | "3m" | "year" | "custom";
+type SearchField = "both" | "title" | "participants";
+type SortOrder = "newest" | "oldest";
 
-const isFiltered = (f: Filter) => f.search !== "" || f.fromDate !== "" || f.toDate !== "";
+const PRESETS: { value: Preset; label: string }[] = [
+  { value: "any", label: "Any time" },
+  { value: "7d", label: "Last 7 days" },
+  { value: "30d", label: "Last 30 days" },
+  { value: "3m", label: "Last 3 months" },
+  { value: "year", label: "This year" },
+  { value: "custom", label: "Custom range…" },
+];
+
+const SEARCH_FIELDS: { value: SearchField; label: string }[] = [
+  { value: "both", label: "Title and participants" },
+  { value: "title", label: "Title only" },
+  { value: "participants", label: "Participants only" },
+];
+
+const NO_FILTER: Filter = {
+  search: "",
+  preset: "any",
+  fromDate: "",
+  toDate: "",
+  searchField: "both",
+  sort: "newest",
+  limit: 50,
+};
+
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+/**
+ * Turn the chosen preset into the two bounds the action actually takes.
+ *
+ * Computed at fetch time rather than when the preset is picked, so "last 7 days"
+ * still means seven days from now if the panel has been open a while. UTC
+ * throughout, matching how every other date in the record is handled.
+ */
+function rangeFor(f: Filter): { fromDate: string; toDate: string } {
+  if (f.preset === "custom") return { fromDate: f.fromDate, toDate: f.toDate };
+  if (f.preset === "any") return { fromDate: "", toDate: "" };
+
+  const now = new Date();
+  if (f.preset === "year") return { fromDate: `${now.getUTCFullYear()}-01-01`, toDate: "" };
+
+  const from = new Date(now);
+  if (f.preset === "7d") from.setUTCDate(now.getUTCDate() - 7);
+  else if (f.preset === "30d") from.setUTCDate(now.getUTCDate() - 30);
+  else from.setUTCMonth(now.getUTCMonth() - 3);
+  // No upper bound: "the last 30 days" ends now, and sending today's date as a
+  // ceiling would exclude a call recorded an hour ago in a later timezone.
+  return { fromDate: iso(from), toDate: "" };
+}
+
+const isFiltered = (f: Filter) =>
+  f.search !== "" || f.preset !== "any" || f.searchField !== "both";
 
 /** How the applied filter reads back to the PM, for the empty and count states. */
 function describeFilter(f: Filter): string {
   const parts: string[] = [];
-  if (f.search) parts.push(`“${f.search}”`);
-  if (f.fromDate && f.toDate) parts.push(`between ${f.fromDate} and ${f.toDate}`);
-  else if (f.fromDate) parts.push(`on or after ${f.fromDate}`);
-  else if (f.toDate) parts.push(`on or before ${f.toDate}`);
+  if (f.search) {
+    const where =
+      f.searchField === "title" ? " in titles"
+      : f.searchField === "participants" ? " in participants"
+      : "";
+    parts.push(`“${f.search}”${where}`);
+  }
+  const { fromDate, toDate } = rangeFor(f);
+  if (f.preset === "custom" && fromDate && toDate) parts.push(`between ${fromDate} and ${toDate}`);
+  else if (f.preset === "custom" && fromDate) parts.push(`on or after ${fromDate}`);
+  else if (f.preset === "custom" && toDate) parts.push(`on or before ${toDate}`);
+  else if (f.preset !== "any") {
+    parts.push(`in ${PRESETS.find((p) => p.value === f.preset)!.label.toLowerCase()}`);
+  }
   return parts.join(" ");
 }
 
@@ -146,18 +217,18 @@ export function ImportFromFireflies({
     // keeps one place responsible for "what was this call for" instead of
     // duplicating that decision at every call site.
     setAttempted({ filter, skip: atSkip });
+    const { fromDate, toDate } = rangeFor(filter);
     const r = await list.run({
       search: filter.search.trim() || undefined,
-      fromDate: filter.fromDate || undefined,
-      toDate: filter.toDate || undefined,
+      fromDate: fromDate || undefined,
+      toDate: toDate || undefined,
+      searchField: filter.searchField,
+      sort: filter.sort,
+      limit: filter.limit,
       skip: atSkip,
     });
     if (!r.ok) return;
-    setApplied({
-      search: filter.search.trim(),
-      fromDate: filter.fromDate,
-      toDate: filter.toDate,
-    });
+    setApplied({ ...filter, search: filter.search.trim() });
     // Functional, because a "next page" press resolves against whatever is on
     // screen by then rather than against what was there when it was pressed.
     //
@@ -180,7 +251,10 @@ export function ImportFromFireflies({
      * on the page (see MeetingPage), rather than something inferred here from a
      * short list.
      */
-    setSkip(atSkip + PAGE_SIZE);
+    // `filter.limit`, not `applied.limit`: setApplied above does not land until the
+    // next render, so reading state here would step by the *previous* page size
+    // on the fetch that changed it.
+    setSkip(atSkip + filter.limit);
     setHasMore(r.data.hasMore);
   }
 
@@ -264,10 +338,24 @@ export function ImportFromFireflies({
             className="btn sm"
             onClick={() => {
               setOpen(true);
-              void load(NO_FILTER, 0);
+              // Only on the first open. Re-opening shows what was already
+              // fetched rather than spending a request to redraw the same list.
+              if (meetings === null) void load(draft, 0);
             }}
           >
             <Icon name="play" /> Browse meetings
+          </button>
+        )}
+        {/*
+          Closing is a real need rather than a nicety: with the disclosure, four
+          filters, fifty rows and the import form, this panel is the longest
+          thing on the page, and the paste form lives underneath it. It hides,
+          it does not reset — the list, the filters and a chosen meeting all
+          survive, so re-opening costs nothing and loses nothing.
+        */}
+        {open && (
+          <button type="button" className="ghostbtn" onClick={() => setOpen(false)}>
+            Close
           </button>
         )}
       </div>
@@ -287,74 +375,162 @@ export function ImportFromFireflies({
             who imported it.
           </p>
 
-          <div className="ff-search">
-            <label htmlFor="ff-q">Search</label>
-            <input
-              id="ff-q"
-              className="inp"
-              value={draft.search}
-              placeholder="Founder name, email address, or meeting title"
-              disabled={list.pending}
-              onChange={(e) => setDraft({ ...draft, search: e.target.value })}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void load(draft, 0);
-              }}
-            />
-            <button type="button" className="btn sm" disabled={list.pending} onClick={() => void load(draft, 0)}>
-              Search
-            </button>
-            {/* Only while something has been applied to clear back from. The
-                no-matches state carries its own way out, and two identical
-                buttons on one panel is a reader working out whether they differ. */}
-            {isFiltered(applied) && meetings !== null && meetings.length > 0 && (
+          {/*
+            One grid rather than a stack of labelled rows. Four filters plus a
+            search box is a lot of panel, and this control already competes for
+            height with the list it filters — so they sit on as few lines as the
+            width allows and the whole block collapses with the panel.
+          */}
+          <div className="ff-filters">
+            <div className="ff-filter grow">
+              <label htmlFor="ff-q">Search</label>
+              <input
+                id="ff-q"
+                className="inp"
+                value={draft.search}
+                placeholder="Founder name, email address, or meeting title"
+                disabled={list.pending}
+                onChange={(e) => setDraft({ ...draft, search: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void load(draft, 0);
+                }}
+              />
+            </div>
+
+            <div className="ff-filter">
+              <label htmlFor="ff-field">Match</label>
+              <select
+                id="ff-field"
+                className="inp"
+                value={draft.searchField}
+                disabled={list.pending}
+                onChange={(e) =>
+                  setDraft({ ...draft, searchField: e.target.value as SearchField })
+                }
+              >
+                {SEARCH_FIELDS.map((f) => (
+                  <option key={f.value} value={f.value}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="ff-filter">
+              <label htmlFor="ff-when">Recorded</label>
+              <select
+                id="ff-when"
+                className="inp"
+                value={draft.preset}
+                disabled={list.pending}
+                onChange={(e) => setDraft({ ...draft, preset: e.target.value as Preset })}
+              >
+                {PRESETS.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Only the custom option needs the two boxes, so only it shows them. */}
+            {draft.preset === "custom" && (
+              <>
+                <div className="ff-filter">
+                  <label htmlFor="ff-from">From</label>
+                  <input
+                    id="ff-from"
+                    className="inp narrow"
+                    type="date"
+                    value={draft.fromDate}
+                    disabled={list.pending}
+                    max={draft.toDate || undefined}
+                    onChange={(e) => setDraft({ ...draft, fromDate: e.target.value })}
+                  />
+                </div>
+                <div className="ff-filter">
+                  <label htmlFor="ff-to">To</label>
+                  <input
+                    id="ff-to"
+                    className="inp narrow"
+                    type="date"
+                    value={draft.toDate}
+                    disabled={list.pending}
+                    min={draft.fromDate || undefined}
+                    onChange={(e) => setDraft({ ...draft, toDate: e.target.value })}
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="ff-filter">
+              <label htmlFor="ff-sort">Sort</label>
+              <select
+                id="ff-sort"
+                className="inp"
+                value={draft.sort}
+                disabled={list.pending}
+                onChange={(e) => setDraft({ ...draft, sort: e.target.value as SortOrder })}
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+              </select>
+            </div>
+
+            <div className="ff-filter">
+              <label htmlFor="ff-size">Show</label>
+              <select
+                id="ff-size"
+                className="inp narrow"
+                value={String(draft.limit)}
+                disabled={list.pending}
+                onChange={(e) => setDraft({ ...draft, limit: Number(e.target.value) })}
+              >
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="ff-filter actions">
               <button
                 type="button"
-                className="ghostbtn"
+                className="btn sm"
                 disabled={list.pending}
-                onClick={() => {
-                  setDraft(NO_FILTER);
-                  void load(NO_FILTER, 0);
-                }}
+                onClick={() => void load(draft, 0)}
               >
-                Clear filters
+                Apply
               </button>
-            )}
+              {/* Only while something has been applied to clear back from. The
+                  no-matches state carries its own way out, and two identical
+                  buttons on one panel is a reader working out whether they differ. */}
+              {isFiltered(applied) && meetings !== null && meetings.length > 0 && (
+                <button
+                  type="button"
+                  className="ghostbtn"
+                  disabled={list.pending}
+                  onClick={() => {
+                    setDraft(NO_FILTER);
+                    void load(NO_FILTER, 0);
+                  }}
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
           </div>
           {/*
-            The other half of finding a call. Search narrows by who and what; a
-            date range narrows by when, and on one shared account holding every
-            recording the firm has made, "the week we first met them" is often
-            the thing a PM actually remembers. Both bounds are optional and
-            independent — either one alone is a valid filter.
+            Two things a reader would otherwise have to discover. Sorting orders
+            the page rather than the archive — Fireflies decides what lands in a
+            page — and narrowing the match to one field is what makes paging
+            exact, since the merge of two is what blurs it.
           */}
-          <div className="ff-search">
-            <label htmlFor="ff-from">Recorded between</label>
-            <input
-              id="ff-from"
-              className="inp narrow"
-              type="date"
-              value={draft.fromDate}
-              disabled={list.pending}
-              max={draft.toDate || undefined}
-              onChange={(e) => setDraft({ ...draft, fromDate: e.target.value })}
-            />
-            <label htmlFor="ff-to">and</label>
-            <input
-              id="ff-to"
-              className="inp narrow"
-              type="date"
-              value={draft.toDate}
-              disabled={list.pending}
-              min={draft.fromDate || undefined}
-              onChange={(e) => setDraft({ ...draft, toDate: e.target.value })}
-            />
-            <button type="button" className="btn sm" disabled={list.pending} onClick={() => void load(draft, 0)}>
-              Apply
-            </button>
-          </div>
-          {/* Matched by Fireflies against titles and participants, which is what
-              makes a meeting findable at all — the titles follow no convention. */}
-          <p className="ff-note">Matches meeting titles and the people who were on the call.</p>
+          <p className="ff-note">
+            Matching both title and participants is the widest search; narrowing to one makes
+            paging exact. Sorting orders the meetings already fetched, not the whole archive.
+          </p>
 
           {list.pending && (
             <div className="ff-state">
