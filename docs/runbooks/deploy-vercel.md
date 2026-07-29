@@ -354,7 +354,7 @@ role wiring without any UI for it.
 | Signed in, then immediately signed out | `AUTH_SECRET` missing or changed | Recheck 5b, redeploy |
 | "Access blocked" from Google | Account isn't `@biome.in` | Sign in with a Biome account |
 | The call card shows "extraction off · no ANTHROPIC_API_KEY" | The key is not set for **Production** | Settings → Environment Variables → tick Production, redeploy. `/api/health` confirms with `extractionEnabled` |
-| The transcript page offers no way to import from Fireflies | `FIREFLIES_API_KEY` is not set for **Production** | Settings → Environment Variables → add it, Production only, redeploy |
+| The import card shows "import off · no FIREFLIES_API_KEY" | The key is not set for **Production** | Settings → Environment Variables → add it, Production only, redeploy. `/api/health` confirms with `firefliesImportEnabled` |
 | Importing says the Fireflies key is not valid | The key was mistyped, or revoked in Fireflies | Re-copy it from Fireflies → Settings → Developer Settings, redeploy |
 | Extraction returns "An error occurred in the Server Components render" | The function was killed at its time limit before it could return, so there is no error to report | Long transcripts need time. `maxDuration` is 60s (the free-tier ceiling); if a transcript still outruns it, set `EXTRACTION_EFFORT=low` (the default) or split the call in two |
 | Extraction runs but drops most quotes | The model paraphrased; unverifiable quotes are discarded on purpose | Open the "quotes dropped" list on the call card — it shows the text, so you can see whether it is tidying grammar. Re-run, or paste a cleaner transcript |
