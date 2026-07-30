@@ -33,10 +33,19 @@ import {
 } from "@/lib/authz";
 import {
   extractFromTranscript,
-  normaliseForComparison,
   type ExtractionClient,
   type ExtractionResult,
 } from "@/lib/extraction/extract";
+/**
+ * The dedupe module owns "when are two filings the same span, and which one
+ * survives" (KTD10). The in-memory pass over a single run's drafts lives
+ * there; this file reuses the same normaliser, the same anchor key, and the
+ * same contest rule for the one comparison that has to happen against
+ * persisted rows — a re-run's survivors against the filings of blocks it did
+ * not read (R10). Two rules would eventually disagree; this is one rule in
+ * two places.
+ */
+import { anchorKey, compareFilings, normaliseForComparison } from "@/lib/extraction/dedupe";
 import type { ObservationStatus, ScoreValue } from "@/mock/types";
 
 // -------------------------------------------------------------------- deals
@@ -383,6 +392,14 @@ export interface RunExtractionSummary extends ExtractionResult {
   claimsWritten: number;
   /** Quotes the machine re-drafted that the PM had already ruled on, so were skipped. */
   skippedAlreadyRuledOn: number;
+  /**
+   * Filings merged away because another filing carried the same span (KTD10) —
+   * the in-run merges from `mergedByBlock` plus the cross-run collisions the
+   * transaction resolved against blocks this run did not read (R10). The
+   * total, because that is what the run summary renders; the per-block
+   * attribution lives on the ExtractionBlockRun rows.
+   */
+  mergedSpans: number;
 }
 
 /**
@@ -497,8 +514,87 @@ export async function runExtractionForCall(
         (o) => !alreadyRuledOn.has(normaliseForComparison(o.quote)),
       );
 
+      /**
+       * The one-span invariant, held across partial re-runs (R10).
+       *
+       * The in-memory pass (lib/extraction/dedupe.ts) has already collapsed
+       * collisions *within* this run — but a re-run only rewrites the blocks
+       * it read, so a span this run files may already be standing in a block
+       * outside its read set, where the scoped delete above cannot see it.
+       * Without this comparison, pressing re-run after a partial failure
+       * reinserts that span as a second filing — the exact state the dedupe
+       * exists to prevent.
+       *
+       * One indexed read (dealId + callNumber) of the call's undecided
+       * machine rows in unread blocks, then the same contest the in-memory
+       * pass runs: higher confidence wins, rubric order breaks ties
+       * (`compareFilings`, the one rule in one home). Decided rows are not
+       * read — a human ruling outranks the machine, and `alreadyRuledOn`
+       * has already kept this run's drafts off those quotes.
+       */
+      const incumbents = await tx.observation.findMany({
+        where: { ...machineWritten, rubricKey: { notIn: result.succeededBlocks } },
+        select: { id: true, quote: true, rubricKey: true, confidence: true },
+      });
+      const incumbentsBySpan = new Map<string, typeof incumbents>();
+      for (const row of incumbents) {
+        const span = normaliseForComparison(row.quote);
+        const group = incumbentsBySpan.get(span);
+        if (group) group.push(row);
+        else incumbentsBySpan.set(span, [row]);
+      }
+
+      /** Newcomers a persisted filing beat — never created. */
+      const beatenNewcomers = new Set<(typeof fresh)[number]>();
+      /** Persisted losers → the newcomer whose id is only known after the insert. */
+      const dethronedByNewcomer: { ids: string[]; winnerKey: string }[] = [];
+      /** Persisted losers → a persisted winner, both ids already known. */
+      const dethronedByIncumbent: { ids: string[]; winnerId: string }[] = [];
+      /** Anchor-map entries pointing a beaten newcomer's claims at the incumbent. */
+      const incumbentAnchors: { key: string; id: string }[] = [];
+      /** Cross-run merges, attributed to the colliding block this run read. */
+      const crossMergedByBlock: Record<string, number> = {};
+
+      for (const o of fresh) {
+        const contested = incumbentsBySpan.get(normaliseForComparison(o.quote));
+        if (!contested?.length) continue;
+
+        const best = contested.reduce((a, b) => (compareFilings(b, a) < 0 ? b : a));
+        /**
+         * However the contest goes, one filing survives out of the newcomer
+         * plus `contested`, so exactly `contested.length` filings merge away.
+         * Counted on the run row of the block this run read — the unread
+         * blocks' run rows describe their own runs and are left standing,
+         * like everything else about those blocks.
+         */
+        crossMergedByBlock[o.rubricKey] =
+          (crossMergedByBlock[o.rubricKey] ?? 0) + contested.length;
+
+        if (compareFilings(o, best) < 0) {
+          // The newcomer wins: every persisted filing of this span goes, its
+          // claims repointed to the newcomer once the insert gives it an id.
+          dethronedByNewcomer.push({
+            ids: contested.map((r) => r.id),
+            winnerKey: anchorKey(o.rubricKey, o.quote),
+          });
+        } else {
+          // The incumbent stands: the newcomer is dropped before it is ever
+          // written, and its claims anchor to the incumbent instead. Any
+          // *other* persisted filings of the span (legacy duplicates from
+          // before the dedupe existed) fold into the winner too.
+          beatenNewcomers.add(o);
+          incumbentAnchors.push({ key: anchorKey(o.rubricKey, o.quote), id: best.id });
+          const alsoLosing = contested.filter((r) => r.id !== best.id);
+          if (alsoLosing.length) {
+            dethronedByIncumbent.push({ ids: alsoLosing.map((r) => r.id), winnerId: best.id });
+          }
+        }
+      }
+
+      const toCreate = fresh.filter((o) => !beatenNewcomers.has(o));
+
       await tx.observation.createMany({
-        data: fresh.map((o) => ({
+        data: toCreate.map((o) => ({
           dealId: call.dealId,
           callNumber: call.number,
           rubricKey: o.rubricKey,
@@ -532,25 +628,59 @@ export async function runExtractionForCall(
         select: { id: true, quote: true, rubricKey: true },
       });
       /**
-       * Keyed on block *and* quote, not quote alone.
+       * Keyed on block *and* quote — `anchorKey`, the same key the verbatim
+       * guard's kept-set and the dedupe's repointing use, so a claim that
+       * survived extraction is by construction one this map can place. Keyed
+       * on the quote alone, the map kept whichever row the database returned
+       * last, and a claim could anchor to a different block's observation.
        *
-       * The prompt deliberately tells the model that one passage may be evidence
-       * for several rows, and six blocks each read the whole transcript — so the
-       * same quote text arriving from two blocks is routine, not rare. A map keyed
-       * on quote alone kept whichever row the database returned last, so a claim
-       * could end up anchored to a different block's observation and the ledger
-       * would print the wrong "filed under" row.
+       * Seeded from this run's rows, then extended with the incumbents that
+       * beat this run's filings — a claim whose anchor lost the cross-run
+       * contest anchors to the filing that survived it (KTD11).
        */
-      const anchorKey = (rubricKey: string, quote: string) =>
-        `${rubricKey}::${normaliseForComparison(quote)}`;
       const quoteToId = new Map(
         persisted.map((o) => [anchorKey(o.rubricKey, o.quote), o.id]),
       );
+      for (const { key, id } of incumbentAnchors) quoteToId.set(key, id);
+
+      /**
+       * Dethroned incumbents leave, their claims first (KTD11). The order is
+       * the whole point: Claim.anchorObs cascades on delete, so a claim still
+       * anchored to a loser when the delete lands is silently destroyed with
+       * it. Repointing runs strictly before the delete — and the newcomer
+       * side of each repoint resolves through the map above, which the insert
+       * has already populated by now.
+       */
+      const dethronedIds: string[] = [];
+      for (const d of dethronedByNewcomer) {
+        const winnerId = quoteToId.get(d.winnerKey);
+        // The winner was in this run's insert, so it is always in the map;
+        // guarded so an impossible miss keeps the incumbent rather than
+        // cascading its claims away with nothing to catch them.
+        if (!winnerId) continue;
+        await tx.claim.updateMany({
+          where: { anchorObsId: { in: d.ids } },
+          data: { anchorObsId: winnerId },
+        });
+        dethronedIds.push(...d.ids);
+      }
+      for (const d of dethronedByIncumbent) {
+        await tx.claim.updateMany({
+          where: { anchorObsId: { in: d.ids } },
+          data: { anchorObsId: d.winnerId },
+        });
+        dethronedIds.push(...d.ids);
+      }
+      if (dethronedIds.length) {
+        await tx.observation.deleteMany({ where: { id: { in: dethronedIds } } });
+      }
 
       const claimRows = result.claims.flatMap((c) => {
         const anchorObsId = quoteToId.get(anchorKey(c.rubricKey, c.anchorQuote));
-        // verifyDrafts should already have dropped these; a claim whose quote was
-        // ruled on by a human and therefore not re-created also lands here.
+        // The verbatim guard keys claims the way this map does, so nothing
+        // lands here unplaced by mistake any more. What still does, by
+        // design: a claim whose quote a human already ruled on, so the
+        // observation was deliberately not re-created.
         if (!anchorObsId) return [];
         return [
           {
@@ -587,8 +717,10 @@ export async function runExtractionForCall(
        * is only ever recorded read off succeededBlocks, which the adapters feed
        * strictly from validated output (KTD5, R26).
        *
-       * `mergedSpans` stays at its zero default until the dedupe pass exists
-       * (U6); `configVersion` stays null until per-rubric config does (U10).
+       * `mergedSpans` is the block's losing filings from the in-memory pass
+       * plus the cross-run collisions above, attributed to the in-run block
+       * (see the contest for why). `configVersion` stays null until
+       * per-rubric config exists (U10).
        */
       const attempted = [
         ...result.succeededBlocks,
@@ -605,6 +737,8 @@ export async function runExtractionForCall(
             outcome: "READ" as const,
             droppedQuotes: result.droppedByBlock[rubricKey]?.quotes ?? 0,
             droppedClaims: result.droppedByBlock[rubricKey]?.claims ?? 0,
+            mergedSpans:
+              (result.mergedByBlock[rubricKey] ?? 0) + (crossMergedByBlock[rubricKey] ?? 0),
           })),
           ...result.failedBlocks.map((f) => ({
             callId,
@@ -636,6 +770,10 @@ export async function runExtractionForCall(
         claimsWritten: claimRows.length,
         /** Re-created quotes the PM had already ruled on, and so were skipped. */
         skippedAlreadyRuledOn: result.observations.length - fresh.length,
+        /** In-run merges plus the cross-run collisions this transaction settled. */
+        mergedSpans:
+          Object.values(result.mergedByBlock).reduce((sum, n) => sum + n, 0) +
+          Object.values(crossMergedByBlock).reduce((sum, n) => sum + n, 0),
       };
     },
     /**

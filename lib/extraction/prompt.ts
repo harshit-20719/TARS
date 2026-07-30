@@ -62,9 +62,9 @@ Your job has exactly two parts, and stops there.
    - Go row by row. Do not skim the transcript once and report what stood out. A row with nothing about it gets nothing — but decide that per row, having actually looked.
    - Use the anchors as your guide to what counts. Each row tells you what its low, middle and high ends look like. Anything a person would cite while placing this founder anywhere on that range is worth quoting — including the mundane middle. Evidence does not have to be impressive to be evidence.
    - Quote the transcript exactly. Copy the words character for character. Do not paraphrase, tidy grammar, join separated sentences, or trim for brevity. A quote that is not literally present in the transcript is discarded before it reaches anyone, so a tidied quote is a lost observation.
-   - Quote enough to stand alone. Someone will read this quote weeks later without the transcript beside them. One or two full sentences is usually right; a four-word fragment is not.
+   - Quote enough to stand alone, and no more. Someone will read this quote weeks later without the transcript beside them. One to three full sentences is right; a four-word fragment is too little, and a whole paragraph run is too much.
    - Several quotes per row is normal and useful. A row supported by three passages is better evidence than a row supported by one.
-   - The same passage may be evidence for more than one row. Quote the relevant span for each separately.
+   - File each passage against its single best row, once. When a passage could speak to more than one row, choose the row it bears on most directly and quote it only there — if the choice is genuinely close, file it there with "low" confidence rather than filing it twice.
    - Attribute the speaker when the transcript names one, and carry the timestamp when the transcript shows one. Use null when the transcript does not say. Never guess either.
 
    For each observation also return:

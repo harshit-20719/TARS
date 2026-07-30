@@ -181,6 +181,28 @@ describe("verifyDrafts", () => {
     expect(r.claims).toHaveLength(1);
     expect(r.droppedClaims).toEqual([]);
   });
+
+  /**
+   * The kept-set keys on block and quote — the same `anchorKey` the
+   * transaction's anchor map uses. Keyed on the quote alone, this claim
+   * survived verification on the strength of another block's observation and
+   * was then dropped inside the transaction with no counter anywhere.
+   */
+  it("drops and counts a claim whose anchor was observed only by another block", () => {
+    const r = verifyDrafts(
+      TRANSCRIPT,
+      output({
+        observations: [good], // filed by "ft"
+        claims: [
+          // The claim's own block, "pm", never returned this quote as an observation.
+          { text: "Four years of operator experience.", anchorQuote: good.quote, originTag: "founder-volunteered", rubricKey: "pm" },
+        ],
+      }),
+    );
+    expect(r.claims).toEqual([]);
+    expect(r.droppedClaims).toEqual(["Four years of operator experience."]);
+    expect(r.droppedByBlock).toEqual({ pm: { quotes: 0, claims: 1 } });
+  });
 });
 
 describe("extractFromTranscript", () => {
@@ -243,6 +265,20 @@ describe("extractFromTranscript", () => {
    * transcript against six or seven rows.
    */
   it("runs one call per macro-dimension and merges the results", async () => {
+    /**
+     * Six distinct verbatim spans, one per block. Distinct on purpose: the
+     * same span filed by every block would now merge to one filing (KTD10),
+     * and this test is about the fan-out, not the dedupe — which has its own
+     * tests above and in dedupe.test.ts.
+     */
+    const spanFor = [
+      "We spent four years inside mid-market bank operations.",
+      "The reconciliation break that actually costs them happens at settlement cutover.",
+      "The ledger engine reconciles the streaming feed and the batch file in a single pass.",
+      "Two of the banks we worked with have already told us they'll run a paid pilot.",
+      "reconciles the streaming feed",
+      "happens at settlement cutover.",
+    ];
     const calls: Record<string, unknown>[] = [];
     const client: ExtractionClient = {
       messages: {
@@ -252,7 +288,8 @@ describe("extractFromTranscript", () => {
           // Routed on the rubric key the request carries (KTD7), and a request
           // this stub does not recognise throws rather than answering with a
           // default — a routing mistake must fail as one.
-          const rubric = RUBRICS.find((r) => r.key === params.rubricKey);
+          const at = RUBRICS.findIndex((r) => r.key === params.rubricKey);
+          const rubric = RUBRICS[at];
           if (!rubric) {
             throw new Error(`stub asked for an unrouted rubric key: ${String(params.rubricKey)}`);
           }
@@ -260,7 +297,7 @@ describe("extractFromTranscript", () => {
             parsed_output: {
               observations: [
                 {
-                  quote: "We spent four years inside mid-market bank operations.",
+                  quote: spanFor[at],
                   subDimensionKey: rubric.subs[0].key,
                   speaker: null,
                   timestamp: null,
@@ -283,6 +320,57 @@ describe("extractFromTranscript", () => {
     expect(r.failedBlocks).toEqual([]);
     // The rubricKey comes from which call it was, never from the model.
     expect(r.observations.map((o) => o.rubricKey).sort()).toEqual(RUBRICS.map((x) => x.key).sort());
+  });
+
+  /**
+   * KTD10 at the fan-out: six blocks read the same transcript, so the same
+   * span arriving from two of them is routine — and exactly one filing may
+   * survive. The pass itself is specified in dedupe.test.ts; what belongs
+   * here is that it runs, after the verbatim guard, and its counts reach the
+   * result.
+   */
+  it("keeps one filing when two blocks return the same span, and counts the merge", async () => {
+    const [first, second] = [RUBRICS[0], RUBRICS[1]];
+    const quote = "We spent four years inside mid-market bank operations.";
+    const client: ExtractionClient = {
+      messages: {
+        parse: async (params) => {
+          const rubric = [first, second].find((r) => r.key === params.rubricKey);
+          if (!rubric) {
+            throw new Error(`stub asked for an unrouted rubric key: ${String(params.rubricKey)}`);
+          }
+          return {
+            parsed_output: {
+              observations: [
+                {
+                  quote,
+                  subDimensionKey: rubric.subs[0].key,
+                  speaker: null,
+                  timestamp: null,
+                  // The earlier block files unsure, the later one confident —
+                  // so the survivor proves confidence outranks rubric order.
+                  confidence: rubric === first ? ("low" as const) : ("high" as const),
+                  mappingNote: "n",
+                },
+              ],
+              claims: [],
+            },
+            stop_reason: "end_turn",
+          };
+        },
+      },
+    };
+
+    const r = await extractFromTranscript(
+      { transcript: TRANSCRIPT, callNumber: 1 },
+      { client, blocks: [first, second] },
+    );
+
+    expect(r.observations).toHaveLength(1);
+    expect(r.observations[0].rubricKey).toBe(second.key);
+    expect(r.mergedByBlock).toEqual({ [first.key]: 1 });
+    // A merge is not a drop: the verbatim counters are untouched by it.
+    expect(r.droppedQuotes).toEqual([]);
   });
 
   /**
@@ -335,6 +423,34 @@ describe("extractFromTranscript", () => {
     await expect(
       extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }),
     ).rejects.toThrow(/ANTHROPIC_API_KEY/);
+  });
+});
+
+describe("the block prompt", () => {
+  /**
+   * KTD10's other half. The dedupe pass enforces one-span-one-row on what
+   * comes back; the prompt must stop inviting the opposite. The old line —
+   * "the same passage may be evidence for more than one row, quote the
+   * relevant span for each separately" — is precisely the behaviour the pass
+   * now merges away, and paying for filings only to collapse them is the
+   * expensive way to disobey the decision.
+   */
+  it("tells the model to file a span against its single best row, not once per row", () => {
+    for (const rubric of RUBRICS) {
+      const p = systemPromptFor(rubric);
+      expect(p).toContain("single best row");
+      expect(p).not.toContain("may be evidence for more than one row");
+      expect(p).not.toContain("for each separately");
+      // Several distinct quotes per row stays — that is depth, not duplication.
+      expect(p).toContain("Several quotes per row is normal");
+    }
+  });
+
+  /** The schema cannot cap quote length (KTD2), so the prompt has to. */
+  it("caps quote length in the instruction", () => {
+    for (const rubric of RUBRICS) {
+      expect(systemPromptFor(rubric)).toContain("a whole paragraph run is too much");
+    }
   });
 });
 

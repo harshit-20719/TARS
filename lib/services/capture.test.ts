@@ -303,9 +303,14 @@ describe("extraction persistence", () => {
     quote: "Our matcher runs continuously instead of as a nightly batch job.",
   });
   const paraphrased = draft({ quote: "Their matcher runs all the time rather than nightly." });
-  /** The same quote, filed with the model unsure of the row. */
+  /**
+   * A second span, filed with the model unsure of the row. Its own span, not
+   * `verbatim`'s: the same span filed twice now merges to the higher-confidence
+   * filing (KTD10), so a low-confidence duplicate would never reach the
+   * database — and these tests need a low-confidence row that does.
+   */
   const unsure = draft({
-    quote: "Our matcher runs continuously instead of as a nightly batch job.",
+    quote: "The head of operations at one of those banks has agreed to a paid pilot.",
     confidence: "low",
   });
 
@@ -661,9 +666,11 @@ describe("extraction persistence", () => {
   });
 
   /**
-   * Two blocks may legitimately return the same quote — the prompt says so. The
-   * claim must anchor to its own block's observation, not to whichever row the
-   * database happened to return last.
+   * Two blocks can still return the same quote — six independent calls cannot
+   * coordinate, whatever the prompt says. One filing survives (KTD10; here a
+   * tie, so the earlier rubric, ft) and the claim must anchor to it — this
+   * test predates the dedupe pass and passes across it by design, because
+   * repointing (KTD11) carries the claim to the surviving filing.
    */
   it("anchors a claim to its own block when two blocks share a quote", async () => {
     const { dealId, callId } = await seedCall("Anchor Collision Test");
@@ -689,6 +696,202 @@ describe("extraction persistence", () => {
     const claim = await db.claim.findFirstOrThrow({ where: { dealId } });
     const anchor = await db.observation.findUniqueOrThrow({ where: { id: claim.anchorObsId } });
     expect(anchor.rubricKey).toBe("ft");
+  });
+
+  /**
+   * KTD10: one span, one filing — the higher-confidence one, with rubric order
+   * breaking ties. KTD11: the collapse never costs a claim; it is repointed to
+   * the surviving filing. R10: the invariant holds across partial re-runs too,
+   * where the colliding filings live in different runs and only one of them is
+   * in memory.
+   */
+  describe("one span, one filing", () => {
+    const SPAN = "Our matcher runs continuously instead of as a nightly batch job.";
+
+    /** One filing of the span, as a block's parsed output carries it. */
+    const filing = (subDimensionKey: string, confidence: "high" | "low") => ({
+      quote: SPAN,
+      subDimensionKey,
+      speaker: null,
+      timestamp: null,
+      confidence,
+      mappingNote: "n",
+    });
+
+    const moatClaim = {
+      text: "Continuous reconciliation is the moat.",
+      anchorQuote: SPAN,
+      originTag: "founder-volunteered" as const,
+    };
+
+    /**
+     * A client answering per block: the payload for the blocks named, a
+     * retryable failure for the blocks told to fail, empty output everywhere
+     * else. Unlike `stubClient` it does not fan a shared quote's claim out to
+     * every block that observed it, which is exactly the control these tests
+     * need — a claim here belongs to one block.
+     */
+    const routed = (
+      perBlock: Record<string, { observations?: unknown[]; claims?: unknown[] }>,
+      failOn: string[] = [],
+    ): ExtractionClient => ({
+      messages: {
+        parse: async (params) => {
+          const key = String(params.rubricKey);
+          if (failOn.includes(key)) throw Object.assign(new Error("nope"), { status: 429 });
+          const mine = perBlock[key];
+          return {
+            parsed_output: { observations: mine?.observations ?? [], claims: mine?.claims ?? [] },
+            stop_reason: "end_turn",
+          };
+        },
+      },
+    });
+
+    it("persists the higher-confidence filing when two blocks return the same span", async () => {
+      const { dealId, callId } = await seedCall("Span Merge Test");
+      const summary = await runExtractionForCall(pm, callId, {
+        client: routed({
+          ft: { observations: [filing("earned-insight", "low")], claims: [moatClaim] },
+          pt: { observations: [filing("compounding-moat", "high")] },
+        }),
+      });
+
+      const rows = await db.observation.findMany({ where: { dealId } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].rubricKey).toBe("pt");
+      expect(rows[0].confidence).toBe("high");
+
+      // The losing block's claim followed the span to the winner (KTD11).
+      const claim = await db.claim.findFirstOrThrow({ where: { dealId } });
+      expect(claim.anchorObsId).toBe(rows[0].id);
+      expect(summary.droppedClaims).toEqual([]);
+
+      // Counted, and attributed to the block whose filing lost.
+      expect(summary.mergedSpans).toBe(1);
+      const ftRun = await db.extractionBlockRun.findUniqueOrThrow({
+        where: { callId_rubricKey: { callId, rubricKey: "ft" } },
+      });
+      expect(ftRun.mergedSpans).toBe(1);
+    });
+
+    it("keeps the earlier rubric on an equal-confidence tie, run after run", async () => {
+      const { dealId, callId } = await seedCall("Span Tie Test");
+      const client = routed({
+        ft: { observations: [filing("earned-insight", "high")] },
+        pt: { observations: [filing("compounding-moat", "high")] },
+      });
+
+      await runExtractionForCall(pm, callId, { client });
+      const first = await db.observation.findMany({ where: { dealId } });
+      expect(first).toHaveLength(1);
+      expect(first[0].rubricKey).toBe("ft");
+
+      // The same drafts arriving again settle the same way — deterministic,
+      // so re-running cannot flip the filing between rubrics.
+      await runExtractionForCall(pm, callId, { force: true, client });
+      const second = await db.observation.findMany({ where: { dealId } });
+      expect(second).toHaveLength(1);
+      expect(second[0].rubricKey).toBe("ft");
+    });
+
+    it("collapses a span one block returned twice to one filing", async () => {
+      const { dealId, callId } = await seedCall("Twice Filed Test");
+      await runExtractionForCall(pm, callId, {
+        client: routed({
+          pt: {
+            observations: [filing("compounding-moat", "low"), filing("time-to-value", "high")],
+          },
+        }),
+      });
+
+      const rows = await db.observation.findMany({ where: { dealId } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].subDimensionKey).toBe("time-to-value");
+    });
+
+    /**
+     * R10, the direction that loses data if unhandled: run one filed the span
+     * from a block this re-run does not read, so the incumbent survives the
+     * scoped delete — and without the cross-run comparison, the re-run's own
+     * filing lands beside it as a second copy of the same span.
+     */
+    it("a partial re-run does not reinsert a span an unread block's filing already carries", async () => {
+      const { dealId, callId } = await seedCall("Cross Run Newcomer Wins Test");
+
+      // Run one: the ft block files the span unsure, with a claim anchored to it.
+      await runExtractionForCall(pm, callId, {
+        client: routed({
+          ft: { observations: [filing("earned-insight", "low")], claims: [moatClaim] },
+        }),
+      });
+      const incumbent = await db.observation.findFirstOrThrow({ where: { dealId } });
+      expect(incumbent.rubricKey).toBe("ft");
+
+      // Run two: ft fails (so it stays unread), pt files the same span confidently.
+      const summary = await runExtractionForCall(pm, callId, {
+        force: true,
+        client: routed(
+          { pt: { observations: [filing("compounding-moat", "high")] } },
+          ["ft"],
+        ),
+      });
+
+      // One filing — the surer one. The incumbent went.
+      const rows = await db.observation.findMany({ where: { dealId } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].rubricKey).toBe("pt");
+      expect(rows[0].confidence).toBe("high");
+
+      // The incumbent's claim was repointed to the survivor before the delete
+      // (KTD11) — the cascade would otherwise have taken it silently.
+      const claim = await db.claim.findFirstOrThrow({ where: { dealId } });
+      expect(claim.anchorObsId).toBe(rows[0].id);
+      expect(claim.text).toBe(moatClaim.text);
+
+      // Counted on the run row of the block this run read.
+      expect(summary.mergedSpans).toBe(1);
+      const ptRun = await db.extractionBlockRun.findUniqueOrThrow({
+        where: { callId_rubricKey: { callId, rubricKey: "pt" } },
+      });
+      expect(ptRun.mergedSpans).toBe(1);
+    });
+
+    /**
+     * The same collision, other winner: the persisted filing is the surer one,
+     * so the newcomer is dropped — and the claims it arrived with anchor to
+     * the incumbent instead of vanishing with it.
+     */
+    it("keeps the persisted filing when it is the surer one, and anchors new claims to it", async () => {
+      const { dealId, callId } = await seedCall("Cross Run Incumbent Wins Test");
+
+      // Run one: the ft block files the span confidently.
+      await runExtractionForCall(pm, callId, {
+        client: routed({ ft: { observations: [filing("earned-insight", "high")] } }),
+      });
+      const incumbent = await db.observation.findFirstOrThrow({ where: { dealId } });
+
+      // Run two: ft fails, pt re-files the same span unsure, with a claim.
+      const summary = await runExtractionForCall(pm, callId, {
+        force: true,
+        client: routed(
+          { pt: { observations: [filing("compounding-moat", "low")], claims: [moatClaim] } },
+          ["ft"],
+        ),
+      });
+
+      // The incumbent stood; the newcomer was never written.
+      const rows = await db.observation.findMany({ where: { dealId } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(incumbent.id);
+      expect(rows[0].confidence).toBe("high");
+
+      // The re-run's claim anchors to the filing that survived (KTD11).
+      const claim = await db.claim.findFirstOrThrow({ where: { dealId } });
+      expect(claim.anchorObsId).toBe(incumbent.id);
+      expect(summary.claimsWritten).toBe(1);
+      expect(summary.mergedSpans).toBe(1);
+    });
   });
 
   it("lets a PARTNER run extraction", async () => {

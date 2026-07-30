@@ -50,9 +50,17 @@ import {
 } from "./providers/anthropic";
 import { resolveExtractionProvider } from "./provider";
 import { buildExtractionUserMessage, systemPromptFor } from "./prompt";
+import { anchorKey, dedupeSpans, normaliseForComparison } from "./dedupe";
 
 export { ExtractionError };
 export type { DraftClaim, DraftObservation, ExtractionOutput };
+
+/**
+ * The comparison normaliser lives in dedupe.ts now — "what makes two spans the
+ * same span" is that module's whole subject — re-exported here so the existing
+ * importers (capture.ts, the tests) keep their seam.
+ */
+export { normaliseForComparison } from "./dedupe";
 
 /**
  * The Anthropic-owned pieces, re-exported from their new home so existing
@@ -186,6 +194,14 @@ export interface ExtractionResult {
    */
   droppedByBlock: Record<string, { quotes: number; claims: number }>;
   /**
+   * Filings merged away because another filing carried the same span (KTD10),
+   * attributed to the block whose filing lost, keyed by rubric key. Same
+   * convention as `droppedByBlock`: a key appears only when its block lost
+   * something. A merge is not a drop — the span survives, once — so it is a
+   * sibling field rather than a third counter on the drops.
+   */
+  mergedByBlock: Record<string, number>;
+  /**
    * Which macro-dimensions failed, if any. A partial result is kept rather than
    * discarded: five blocks of evidence is worth having, and re-running only costs
    * the PM another press. Surfaced so the failure is visible instead of looking
@@ -204,23 +220,6 @@ export interface ExtractionResult {
 }
 
 // ------------------------------------------------------------ verbatim guard
-
-/**
- * Normalise for comparison only.
- *
- * Collapsing whitespace and folding typographic quotes to their ASCII forms is
- * not a loosening of "verbatim" — transcripts wrap lines arbitrarily, and models
- * routinely return a curly apostrophe where the source had a straight one.
- * Neither changes a single word. Everything else, including case, must match.
- */
-export function normaliseForComparison(s: string): string {
-  return s
-    .replace(/[‘’ʼ]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[–—]/g, "-")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 /** True when the quote genuinely appears in the transcript. */
 export function isVerbatim(transcript: string, quote: string): boolean {
@@ -328,7 +327,26 @@ export async function extractFromTranscript(
     );
   }
 
-  return { ...verifyDrafts(input.transcript, merged), failedBlocks, succeededBlocks };
+  /**
+   * Verify first, dedupe second — in that order on purpose. The verbatim guard
+   * decides what is real against the transcript; the dedupe pass (KTD10)
+   * decides which real filing keeps each span, and repoints claims off the
+   * losers (KTD11). Run the other way round, a span could win its contest and
+   * then be dropped as a paraphrase, taking the repointed claims down with it.
+   * Both passes run here, in memory: inside the persistence transaction they
+   * would spend a time budget already sized against the function ceiling.
+   */
+  const verified = verifyDrafts(input.transcript, merged);
+  const deduped = dedupeSpans({ observations: verified.observations, claims: verified.claims });
+
+  return {
+    ...verified,
+    observations: deduped.observations,
+    claims: deduped.claims,
+    mergedByBlock: deduped.mergedByBlock,
+    failedBlocks,
+    succeededBlocks,
+  };
 }
 
 /**
@@ -380,7 +398,7 @@ async function extractBlock(
 export function verifyDrafts(
   transcript: string,
   parsed: ExtractionOutput,
-): Omit<ExtractionResult, "failedBlocks" | "succeededBlocks"> {
+): Omit<ExtractionResult, "failedBlocks" | "succeededBlocks" | "mergedByBlock"> {
   const observations: DraftObservation[] = [];
   const droppedQuotes: string[] = [];
   const droppedByBlock: ExtractionResult["droppedByBlock"] = {};
@@ -395,15 +413,24 @@ export function verifyDrafts(
     }
   }
 
-  // A claim is only as good as the quote holding it up. If the anchor was
-  // dropped, the claim has nothing to point at and goes with it rather than
-  // becoming a free-floating assertion in the ledger.
-  const kept = new Set(observations.map((o) => normaliseForComparison(o.quote)));
+  /**
+   * A claim is only as good as the quote holding it up. If the anchor was
+   * dropped, the claim has nothing to point at and goes with it rather than
+   * becoming a free-floating assertion in the ledger.
+   *
+   * Kept-set keyed on block *and* quote — the same `anchorKey` the transaction's
+   * anchor map uses — not on the quote alone. Keyed on the quote alone, a claim
+   * whose own block never observed its anchor survived here on the strength of
+   * another block's observation, and was then dropped by the transaction's map
+   * with no counter anywhere. Same key both places means a claim that survives
+   * this guard is one the transaction can actually place.
+   */
+  const kept = new Set(observations.map((o) => anchorKey(o.rubricKey, o.quote)));
   const claims: DraftClaim[] = [];
   const droppedClaims: string[] = [];
 
   for (const c of parsed.claims) {
-    if (kept.has(normaliseForComparison(c.anchorQuote))) claims.push(c);
+    if (kept.has(anchorKey(c.rubricKey, c.anchorQuote))) claims.push(c);
     else {
       droppedClaims.push(c.text);
       // Attributed to the block whose call returned the claim — the same key

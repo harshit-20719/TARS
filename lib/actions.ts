@@ -257,6 +257,15 @@ export async function runExtractionAction(
     /** Claims dropped because their anchor quote did not survive verification. */
     droppedClaims: number;
     /**
+     * Filings merged away because another filing carried the same span
+     * (KTD10) — across blocks, within a block, and across partial re-runs
+     * alike. A count, not the pairs: a merge loses no words and no claims
+     * (the claim repoints, KTD11), so unlike a dropped quote there is
+     * nothing further the PM needs to inspect. The run summary (U9) renders
+     * it as housekeeping.
+     */
+    mergedSpans: number;
+    /**
      * Macro-dimensions whose call failed. A partial run still writes the rest.
      * `kind` is what lets the button tell a failure a re-run can fix from one
      * it cannot (KTD6) — "terminal" must not render a re-run invitation.
@@ -292,6 +301,7 @@ export async function runExtractionAction(
         // A count, not the texts: a dropped claim's anchor quote is already in
         // droppedQuotes, so the texts would say the same thing twice.
         droppedClaims: summary.droppedClaims.length,
+        mergedSpans: summary.mergedSpans,
         failedBlocks: summary.failedBlocks.map((f) => ({ label: f.label, reason: f.reason, kind: f.kind })),
         succeededBlocks: summary.succeededBlocks,
       },
