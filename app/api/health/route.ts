@@ -20,7 +20,7 @@ import { db } from "@/lib/db";
 import { adminEmails } from "@/lib/adminEmails";
 import { ALLOWED_EMAIL_DOMAIN } from "@/lib/auth.config";
 import { RUBRICS } from "@/framework";
-import { DEFAULT_EXTRACTION_MODEL, thinkingConfigFor } from "@/lib/extraction/extract";
+import { resolveProvider } from "@/lib/extraction/provider";
 
 // Never prerender or cache — the whole point is the live state of this instance.
 export const dynamic = "force-dynamic";
@@ -35,8 +35,17 @@ export async function GET() {
     AUTH_GOOGLE_SECRET: present(process.env.AUTH_GOOGLE_SECRET),
     ADMIN_EMAILS: present(process.env.ADMIN_EMAILS),
     ANTHROPIC_API_KEY: present(process.env.ANTHROPIC_API_KEY),
+    GOOGLE_API_KEY: present(process.env.GOOGLE_API_KEY),
+    GEMINI_API_KEY: present(process.env.GEMINI_API_KEY),
     FIREFLIES_API_KEY: present(process.env.FIREFLIES_API_KEY),
   };
+
+  /**
+   * One resolver decides the provider for every surface (R1, R4) — the health
+   * route reports its answer rather than re-deriving it from the env, so what
+   * this endpoint says is what extraction will actually do.
+   */
+  const extraction = resolveProvider();
 
   /**
    * Shape checks on the Google credentials.
@@ -108,17 +117,18 @@ export async function GET() {
       ...(databaseError ? { databaseError } : {}),
       canSignIn,
       ...(missing.length ? { missing } : {}),
-      extractionEnabled: env.ANTHROPIC_API_KEY,
+      extractionEnabled: extraction.enabled,
       /**
-       * Which model extraction will actually use, and how the request will be
-       * shaped for it. A public model id, not a secret — and the pair answers the
-       * two questions a failing extraction raises: did EXTRACTION_MODEL take, and
-       * is this build sending that model's generation the parameters it accepts?
+       * Which provider extraction runs on and which model it will use — the two
+       * answers a failing extraction raises first: did the cutover take (adding
+       * the Gemini key switches provider; deleting it falls back), and did
+       * EXTRACTION_MODEL take. Public identifiers, never secrets. The old
+       * request-shape field is gone: it printed one provider's parameter names,
+       * which on the other provider's deployment answered a question nobody
+       * asked with words that did not apply.
        */
-      extractionModel: process.env.EXTRACTION_MODEL?.trim() || DEFAULT_EXTRACTION_MODEL,
-      extractionRequestShape: Object.keys(
-        thinkingConfigFor(process.env.EXTRACTION_MODEL?.trim() || DEFAULT_EXTRACTION_MODEL),
-      ).sort(),
+      extractionProvider: extraction.provider,
+      extractionModel: extraction.model,
       /**
        * How many concurrent calls one extraction makes — one per macro-dimension.
        * Worth reporting because it is the number that decides whether a run fits in
@@ -126,7 +136,6 @@ export async function GET() {
        * configured, so it changes if the framework does.
        */
       extractionBlocks: RUBRICS.length,
-      extractionEffort: process.env.EXTRACTION_EFFORT?.trim() || "low",
       /**
        * Whether the transcript page will offer the Fireflies picker at all. The
        * commonest report about this feature is "the import control says it is

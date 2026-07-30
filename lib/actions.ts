@@ -254,8 +254,12 @@ export async function runExtractionAction(
     claims: number;
     /** Quotes the model returned that were not literally in the transcript. */
     droppedQuotes: string[];
-    /** Macro-dimensions whose call failed. A partial run still writes the rest. */
-    failedBlocks: { label: string; reason: string }[];
+    /**
+     * Macro-dimensions whose call failed. A partial run still writes the rest.
+     * `kind` is what lets the button tell a failure a re-run can fix from one
+     * it cannot (KTD6) — "terminal" must not render a re-run invitation.
+     */
+    failedBlocks: { label: string; reason: string; kind: string }[];
   }>
 > {
   try {
@@ -276,7 +280,7 @@ export async function runExtractionAction(
          * extraction looks like a quiet transcript.
          */
         droppedQuotes: summary.droppedQuotes,
-        failedBlocks: summary.failedBlocks.map((f) => ({ label: f.label, reason: f.reason })),
+        failedBlocks: summary.failedBlocks.map((f) => ({ label: f.label, reason: f.reason, kind: f.kind })),
       },
     };
   } catch (e) {

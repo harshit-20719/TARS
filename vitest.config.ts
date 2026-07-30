@@ -64,9 +64,16 @@ export default defineConfig({
       // real key here would let a bug reach the live API from a test run.
       ANTHROPIC_API_KEY: "",
       // The Gemini adapter's credentials, unset for the same reason — its
-      // tests inject a stub client and must never reach the live API.
+      // tests inject a stub client and must never reach the live API. The
+      // Vertex routing variables are pinned too: test.env merges into the
+      // inherited process.env, so any name left unpinned lets a developer's
+      // shell credential route a test run at a live endpoint.
       GOOGLE_API_KEY: "",
       GEMINI_API_KEY: "",
+      GOOGLE_CLOUD_PROJECT: "",
+      GOOGLE_CLOUD_LOCATION: "",
+      GOOGLE_GENAI_USE_VERTEXAI: "",
+      GOOGLE_GENAI_USE_ENTERPRISE: "",
       // Same reasoning, and one more: the Fireflies account holds every call
       // Biome has recorded, so a test that reached it would be reading founder
       // transcripts from a suite run.

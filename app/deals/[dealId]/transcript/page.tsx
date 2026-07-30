@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { getCalls, getDeal, getRecord } from "@/lib/data";
+import { missingCredentialCopy, resolveProvider } from "@/lib/extraction/provider";
 import { AddCallForm } from "@/components/authoring/AddCallForm";
 import { ImportFromFireflies } from "@/components/authoring/ImportFromFireflies";
 import { RunExtractionButton } from "@/components/authoring/RunExtractionButton";
@@ -26,9 +27,10 @@ export default async function TranscriptPage({ params }: { params: Promise<{ dea
   const [deal, rec, calls] = await Promise.all([getDeal(dealId), getRecord(dealId), getCalls(dealId)]);
   if (!deal || !rec) notFound();
 
-  // Read on the server: the key must never reach the browser, and the form only
-  // needs to know whether the offer is available.
-  const extractionEnabled = Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+  // Read on the server: no key ever reaches the browser, and the form only
+  // needs to know whether the offer is available. Which provider answers is
+  // provider.ts's decision (R1, R4), not this page's.
+  const extractionEnabled = resolveProvider().enabled;
   /**
    * The same treatment for the Fireflies credential, and here it carries more
    * weight (KTD10): this key opens every call Biome has ever recorded, and a
@@ -86,7 +88,7 @@ export default async function TranscriptPage({ params }: { params: Promise<{ dea
                   ) : (
                     <span className="chip pending">
                       <span className="dot" />
-                      extraction off · no ANTHROPIC_API_KEY on this deployment
+                      extraction off · {missingCredentialCopy()}
                     </span>
                   )}
                   <span className="ctl-note">

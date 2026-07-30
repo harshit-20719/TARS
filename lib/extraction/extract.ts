@@ -45,10 +45,10 @@ import {
 } from "./types";
 import {
   BLOCK_TIMEOUT_MS,
-  createAnthropicProvider,
   DEFAULT_EXTRACTION_MODEL,
   type ExtractionClient,
 } from "./providers/anthropic";
+import { resolveExtractionProvider } from "./provider";
 import { buildExtractionUserMessage, systemPromptFor } from "./prompt";
 
 export { ExtractionError };
@@ -183,7 +183,7 @@ export interface ExtractionResult {
    * the PM another press. Surfaced so the failure is visible instead of looking
    * like the transcript simply had nothing in it.
    */
-  failedBlocks: { rubricKey: string; label: string; reason: string }[];
+  failedBlocks: { rubricKey: string; label: string; reason: string; kind: ExtractionFailureKind }[];
   /**
    * Which macro-dimensions returned an answer.
    *
@@ -257,12 +257,14 @@ export async function extractFromTranscript(
   }
 
   /**
-   * The default provider is the Anthropic adapter, constructed per run so no
-   * credential is read at import time. `deps.client` keeps the old seam: tests
-   * stub at the SDK slice and every request still flows through the adapter's
-   * request build, so what a stub records is what the wire would carry.
+   * The default provider is whichever one provider.ts resolves from the
+   * environment (Gemini when its key is present, Anthropic otherwise),
+   * constructed per run so no credential is read at import time. `deps.client`
+   * keeps the old seam: tests stub at the SDK slice and every request still
+   * flows through the Anthropic adapter's request build, so what a stub
+   * records is what the wire would carry.
    */
-  const provider: ExtractionProvider = createAnthropicProvider({
+  const provider: ExtractionProvider = resolveExtractionProvider({
     client: deps.client,
     model: deps.model,
   });
@@ -292,10 +294,15 @@ export async function extractFromTranscript(
       outcome.reason instanceof ExtractionError
         ? outcome.reason.message
         : String((outcome.reason as Error)?.message ?? outcome.reason);
-    failedBlocks.push({ rubricKey: rubric.key, label: rubric.label, reason });
-    failedKinds.push(
-      outcome.reason instanceof ExtractionError ? outcome.reason.kind : "unknown",
-    );
+    /**
+     * The kind rides each failed block so the UI can be honest about what a
+     * re-run would do: a retryable failure is fixed by pressing the button
+     * again; a terminal one fails identically on every press (KTD6).
+     */
+    const kind: ExtractionFailureKind =
+      outcome.reason instanceof ExtractionError ? outcome.reason.kind : "unknown";
+    failedBlocks.push({ rubricKey: rubric.key, label: rubric.label, reason, kind });
+    failedKinds.push(kind);
   });
 
   // Every block failing is not a partial result, it is a failed run. Usually one

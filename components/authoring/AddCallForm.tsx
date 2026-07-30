@@ -27,7 +27,11 @@ export function AddCallForm({
 }: {
   dealId: string;
   nextNumber: number;
-  /** False when no ANTHROPIC_API_KEY is set — the offer is hidden rather than failing. */
+  /**
+   * False when no provider credential is configured — the offer is hidden
+   * rather than failing. Which credential enables which provider is
+   * lib/extraction/provider.ts's decision; this component only mirrors it.
+   */
   extractionEnabled: boolean;
 }) {
   const addCall = useAction(addCallAction);
@@ -127,7 +131,8 @@ export function AddCallForm({
           </button>
           {!extractionEnabled && (
             <span className="ctl-note">
-              Extraction is off — no ANTHROPIC_API_KEY set. Transcripts still save.
+              Extraction is off — set GOOGLE_API_KEY (Gemini) or ANTHROPIC_API_KEY (Anthropic). Transcripts
+              still save.
             </span>
           )}
         </div>

@@ -57,16 +57,45 @@ export function RunExtractionButton({
       )}
       <ControlError error={extract.error} reauth={extract.reauth} as="span" />
 
-      {summary && summary.failedBlocks.length > 0 && (
+      {/*
+        Failed blocks, split by what pressing the button again would actually do
+        (KTD6). A retryable failure — a rate limit, a timeout — is genuinely
+        fixed by a re-run, so the invitation stays. A terminal one — a content
+        refusal — fails identically on every press, and inviting a re-run there
+        sends a PM into a loop that spends a full transcript read each time and
+        can never succeed.
+      */}
+      {summary && summary.failedBlocks.some((f) => f.kind !== "terminal") && (
         <div className="ctl-err" style={{ flexBasis: "100%" }}>
-          {summary.failedBlocks.length} of six blocks failed and wrote nothing — the rest saved. Re-run to try
-          them again.
+          {summary.failedBlocks.filter((f) => f.kind !== "terminal").length} of six blocks failed and wrote
+          nothing — the rest saved. Re-run to try them again.
           <ul className="drop-list">
-            {summary.failedBlocks.map((f) => (
-              <li key={f.label}>
-                <b>{f.label}</b> — {f.reason}
-              </li>
-            ))}
+            {summary.failedBlocks
+              .filter((f) => f.kind !== "terminal")
+              .map((f) => (
+                <li key={f.label}>
+                  <b>{f.label}</b> — {f.reason}
+                </li>
+              ))}
+          </ul>
+        </div>
+      )}
+
+      {summary && summary.failedBlocks.some((f) => f.kind === "terminal") && (
+        <div className="ctl-err" style={{ flexBasis: "100%" }}>
+          {summary.failedBlocks.filter((f) => f.kind === "terminal").length === 1
+            ? "One block"
+            : `${summary.failedBlocks.filter((f) => f.kind === "terminal").length} blocks`}{" "}
+          cannot be read from this transcript — the model refuses it the same way on every run, so a re-run
+          will not help. A different model or provider (EXTRACTION_MODEL) is the lever.
+          <ul className="drop-list">
+            {summary.failedBlocks
+              .filter((f) => f.kind === "terminal")
+              .map((f) => (
+                <li key={f.label}>
+                  <b>{f.label}</b> — {f.reason}
+                </li>
+              ))}
           </ul>
         </div>
       )}
