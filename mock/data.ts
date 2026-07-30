@@ -1,6 +1,7 @@
 import type {
   Deal,
   DealRecord,
+  ExtractionBlockRun,
   Observation,
   Claim,
   SubDimensionScore,
@@ -225,16 +226,73 @@ export const FIXTURE_CALLS: Record<string, Call[]> = {
       date: "19 Jul 2026",
       transcript:
         "[00:03] Meera: C&I sites are getting hit with demand charges they can't predict...",
-      extracted: true,
+      // One block went unread (see FIXTURE_BLOCK_RUNS), and `extracted` is
+      // derived: true only when every block read.
+      extracted: false,
     },
   ],
   parch: [],
+};
+
+/** A block one run read clean, with nothing dropped unless said otherwise. */
+const readBlock = (
+  rubricKey: string,
+  ranAt: string,
+  drops?: Partial<Pick<ExtractionBlockRun, "droppedQuotes" | "droppedClaims">>,
+): ExtractionBlockRun => ({
+  rubricKey,
+  outcome: "read",
+  droppedQuotes: 0,
+  droppedClaims: 0,
+  mergedSpans: 0,
+  ranAt,
+  ...drops,
+});
+
+/**
+ * Per-block run outcomes for the fixture calls (KTD16), keyed by call id and
+ * listed in rubric-key order, the order the repository returns.
+ *
+ * Halten is the clean case: every block read, one with a dropped paraphrase so
+ * the drop counts are exercised. Cirrus is the partial-run path the plan
+ * requires a seeded workspace to hold (R24): five blocks read and Financial &
+ * Legal failed retryably, so its call shows unread work that a re-run would
+ * pick up — and its `extracted` flag is false, because the boolean derives from
+ * exactly this.
+ */
+export const FIXTURE_BLOCK_RUNS: Record<string, ExtractionBlockRun[]> = {
+  call1: [
+    readBlock("fl", "22 Jul 2026"),
+    readBlock("ft", "22 Jul 2026"),
+    readBlock("gtm", "22 Jul 2026"),
+    readBlock("pm", "22 Jul 2026", { droppedQuotes: 1 }),
+    readBlock("pt", "22 Jul 2026"),
+    readBlock("sf", "22 Jul 2026"),
+  ],
+  ccall1: [
+    {
+      rubricKey: "fl",
+      outcome: "failed-retryable",
+      reason:
+        "Financial & Legal: rate limited — the transcript is saved, so try extraction again in a moment.",
+      droppedQuotes: 0,
+      droppedClaims: 0,
+      mergedSpans: 0,
+      ranAt: "19 Jul 2026",
+    },
+    readBlock("ft", "19 Jul 2026"),
+    readBlock("gtm", "19 Jul 2026"),
+    readBlock("pm", "19 Jul 2026"),
+    readBlock("pt", "19 Jul 2026", { droppedClaims: 1, droppedQuotes: 1 }),
+    readBlock("sf", "19 Jul 2026"),
+  ],
 };
 
 const metaOf = (dealId: string): CallMeta[] =>
   (FIXTURE_CALLS[dealId] ?? []).map(({ transcript, ...rest }) => ({
     ...rest,
     transcriptChars: transcript.length,
+    blockRuns: FIXTURE_BLOCK_RUNS[rest.id] ?? [],
   }));
 
 const RECORDS: Record<string, DealRecord> = {

@@ -178,6 +178,14 @@ export interface ExtractionResult {
   /** Claims whose anchor quote did not survive verification. */
   droppedClaims: string[];
   /**
+   * The same drops, attributed to the block that produced them, keyed by rubric
+   * key (KTD16). The flat lists above keep their shape — the UI reads them —
+   * but the per-block run record needs a count per block, and a drop's block is
+   * knowable because every draft carries the rubricKey its call stamped on it.
+   * A key appears only when its block dropped something; absent means zero.
+   */
+  droppedByBlock: Record<string, { quotes: number; claims: number }>;
+  /**
    * Which macro-dimensions failed, if any. A partial result is kept rather than
    * discarded: five blocks of evidence is worth having, and re-running only costs
    * the PM another press. Surfaced so the failure is visible instead of looking
@@ -375,10 +383,16 @@ export function verifyDrafts(
 ): Omit<ExtractionResult, "failedBlocks" | "succeededBlocks"> {
   const observations: DraftObservation[] = [];
   const droppedQuotes: string[] = [];
+  const droppedByBlock: ExtractionResult["droppedByBlock"] = {};
+  const dropsFor = (rubricKey: string) =>
+    (droppedByBlock[rubricKey] ??= { quotes: 0, claims: 0 });
 
   for (const o of parsed.observations) {
     if (isVerbatim(transcript, o.quote)) observations.push(o);
-    else droppedQuotes.push(o.quote);
+    else {
+      droppedQuotes.push(o.quote);
+      dropsFor(o.rubricKey).quotes++;
+    }
   }
 
   // A claim is only as good as the quote holding it up. If the anchor was
@@ -390,8 +404,13 @@ export function verifyDrafts(
 
   for (const c of parsed.claims) {
     if (kept.has(normaliseForComparison(c.anchorQuote))) claims.push(c);
-    else droppedClaims.push(c.text);
+    else {
+      droppedClaims.push(c.text);
+      // Attributed to the block whose call returned the claim — the same key
+      // the transaction's anchor map uses to place it.
+      dropsFor(c.rubricKey).claims++;
+    }
   }
 
-  return { observations, claims, droppedQuotes, droppedClaims };
+  return { observations, claims, droppedQuotes, droppedClaims, droppedByBlock };
 }

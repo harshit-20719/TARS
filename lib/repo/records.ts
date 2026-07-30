@@ -12,13 +12,20 @@
  */
 
 import { db } from "@/lib/db";
-import { decodeScoreValue, formatRecordDate, toLens, toOriginTag } from "@/lib/domain/codec";
+import {
+  decodeScoreValue,
+  formatRecordDate,
+  toExtractionOutcome,
+  toLens,
+  toOriginTag,
+} from "@/lib/domain/codec";
 import type {
   Call,
   CallMeta,
   Claim,
   Deal,
   DealRecord,
+  ExtractionBlockRun,
   FounderTypeRead,
   Observation,
   Person,
@@ -83,6 +90,11 @@ function importAttribution(row: {
  * Named and reused rather than inlined so there is one place that decides what
  * "call metadata" means, and so adding a column cannot accidentally start
  * dragging the transcript back into the hot path.
+ *
+ * The block runs ride along as a nested select: six small rows per call, read
+ * everywhere the record is (KTD16) — they are what makes a partial extraction
+ * legible after a refresh (R24). Ordered on the rubric key, which is unique per
+ * call, so the order is total and stable however many runs have replaced rows.
  */
 const CALL_META_SELECT = {
   id: true,
@@ -93,11 +105,42 @@ const CALL_META_SELECT = {
   extracted: true,
   importedByEmail: true,
   sourceMeetingId: true,
+  blockRuns: {
+    select: {
+      rubricKey: true,
+      outcome: true,
+      reason: true,
+      droppedQuotes: true,
+      droppedClaims: true,
+      mergedSpans: true,
+      configVersion: true,
+      ranAt: true,
+    },
+    orderBy: { rubricKey: "asc" },
+  },
 } as const;
 
 type CallMetaRow = Prisma.CallGetPayload<{ select: typeof CALL_META_SELECT }> & {
   transcriptChars: number;
 };
+
+/**
+ * `reason` and `configVersion` spread conditionally, like the attribution
+ * above: the contract makes absence meaningful — a read block has no failure to
+ * explain, and no run carries a config version until tuning exists (U10).
+ */
+function toBlockRun(row: CallMetaRow["blockRuns"][number]): ExtractionBlockRun {
+  return {
+    rubricKey: row.rubricKey,
+    outcome: toExtractionOutcome(row.outcome),
+    ...(row.reason ? { reason: row.reason } : {}),
+    droppedQuotes: row.droppedQuotes,
+    droppedClaims: row.droppedClaims,
+    mergedSpans: row.mergedSpans,
+    ...(row.configVersion !== null ? { configVersion: row.configVersion } : {}),
+    ranAt: formatRecordDate(row.ranAt),
+  };
+}
 
 function toCallMeta(row: CallMetaRow): CallMeta {
   return {
@@ -108,6 +151,7 @@ function toCallMeta(row: CallMetaRow): CallMeta {
     date: formatRecordDate(row.date),
     extracted: row.extracted,
     transcriptChars: row.transcriptChars,
+    blockRuns: row.blockRuns.map(toBlockRun),
     ...importAttribution(row),
   };
 }

@@ -16,6 +16,7 @@
 
 import type {
   BinaryValue,
+  ExtractionOutcome,
   Lens,
   OriginTag,
   ScaleValue,
@@ -23,6 +24,7 @@ import type {
   ScoreValue,
 } from "@/mock/types";
 import {
+  ExtractionOutcome as PrismaExtractionOutcome,
   Lens as PrismaLens,
   OriginTag as PrismaOriginTag,
 } from "@prisma/client";
@@ -119,6 +121,27 @@ export const toLens = (v: PrismaLens): Lens => LENS_TO_RECORD[v];
 export function fromLens(v: Lens): PrismaLens {
   const mapped = LENS_FROM_RECORD[v];
   if (!mapped) throw new CodecError(`unknown lens ${JSON.stringify(v)}`);
+  return mapped;
+}
+
+const EXTRACTION_OUTCOME_TO_RECORD: Record<PrismaExtractionOutcome, ExtractionOutcome> = {
+  READ: "read",
+  FAILED_RETRYABLE: "failed-retryable",
+  FAILED_TERMINAL: "failed-terminal",
+};
+
+const EXTRACTION_OUTCOME_FROM_RECORD: Record<ExtractionOutcome, PrismaExtractionOutcome> = {
+  read: PrismaExtractionOutcome.READ,
+  "failed-retryable": PrismaExtractionOutcome.FAILED_RETRYABLE,
+  "failed-terminal": PrismaExtractionOutcome.FAILED_TERMINAL,
+};
+
+export const toExtractionOutcome = (v: PrismaExtractionOutcome): ExtractionOutcome =>
+  EXTRACTION_OUTCOME_TO_RECORD[v];
+
+export function fromExtractionOutcome(v: ExtractionOutcome): PrismaExtractionOutcome {
+  const mapped = EXTRACTION_OUTCOME_FROM_RECORD[v];
+  if (!mapped) throw new CodecError(`unknown extraction outcome ${JSON.stringify(v)}`);
   return mapped;
 }
 

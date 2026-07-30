@@ -16,8 +16,13 @@
  */
 
 import { hash } from "bcryptjs";
-import { FIXTURE_CALLS, getRecord, listDeals } from "../mock/data";
-import { fromLens, fromOriginTag, parseRecordDate } from "../lib/domain/codec";
+import { FIXTURE_BLOCK_RUNS, FIXTURE_CALLS, getRecord, listDeals } from "../mock/data";
+import {
+  fromExtractionOutcome,
+  fromLens,
+  fromOriginTag,
+  parseRecordDate,
+} from "../lib/domain/codec";
 import { PrismaClient, Role, type ScoreType } from "@prisma/client";
 
 const db = new PrismaClient();
@@ -50,7 +55,7 @@ async function seedUsers() {
 }
 
 async function seedRecord() {
-  let counts = { deals: 0, calls: 0, obs: 0, claims: 0, scores: 0, slides: 0, reads: 0 };
+  let counts = { deals: 0, calls: 0, runs: 0, obs: 0, claims: 0, scores: 0, slides: 0, reads: 0 };
 
   for (const deal of listDeals()) {
     const record = getRecord(deal.id);
@@ -98,6 +103,28 @@ async function seedRecord() {
         },
       });
       counts.calls++;
+
+      // The call's per-block run record (KTD16), keyed the way the schema is —
+      // one row per block per call — so reseeding replaces rather than piles up.
+      for (const r of FIXTURE_BLOCK_RUNS[c.id] ?? []) {
+        const fields = {
+          outcome: fromExtractionOutcome(r.outcome),
+          // A read block has no failure to explain; written explicitly so a
+          // reseed clears a value an earlier fixture might have carried.
+          reason: r.reason ?? null,
+          droppedQuotes: r.droppedQuotes,
+          droppedClaims: r.droppedClaims,
+          mergedSpans: r.mergedSpans,
+          configVersion: r.configVersion ?? null,
+          ranAt: parseRecordDate(r.ranAt),
+        };
+        await db.extractionBlockRun.upsert({
+          where: { callId_rubricKey: { callId: c.id, rubricKey: r.rubricKey } },
+          update: fields,
+          create: { callId: c.id, rubricKey: r.rubricKey, ...fields },
+        });
+        counts.runs++;
+      }
     }
 
     // Observation ids are preserved verbatim: claims anchor to them and scores
@@ -232,6 +259,7 @@ async function seedRecord() {
 
   console.log(`  deals              ${counts.deals}`);
   console.log(`  calls              ${counts.calls}`);
+  console.log(`  block runs         ${counts.runs}`);
   console.log(`  observations       ${counts.obs}`);
   console.log(`  claims             ${counts.claims}`);
   console.log(`  scores             ${counts.scores}`);

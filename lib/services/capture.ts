@@ -428,8 +428,8 @@ export async function runExtractionForCall(
    * couple of dozen sequential queries against a connection that goes through
    * Prisma Postgres's proxy. Prisma's interactive transactions time out after
    * five seconds by default, so a slow network turned a successful extraction
-   * into a failed write, and the model tokens were paid for either way. Four
-   * queries instead of N, and a ceiling that a bad minute cannot reach.
+   * into a failed write, and the model tokens were paid for either way. A few
+   * batched statements instead of N, and a ceiling that a bad minute cannot reach.
    */
   /**
    * Rows written by this run, so the re-run delete and the id lookup can both
@@ -571,6 +571,54 @@ export async function runExtractionForCall(
       if (claimRows.length) await tx.claim.createMany({ data: claimRows });
 
       /**
+       * The run's durable record (KTD16): one row per block this run attempted,
+       * replacing that block's previous row and leaving every other block's row
+       * standing — the same scoping as the observation delete above, so the
+       * record and the evidence it describes move together. A failed block was
+       * attempted too: its row is replaced with the failure, which is what makes
+       * "which blocks went unread" readable after a refresh instead of living in
+       * one component's state (R24).
+       *
+       * The failure kinds fold to the record's two classes (R22): "terminal"
+       * fails identically on every press and is recorded as such; everything
+       * else — retryable, filing, unknown — is recorded retryable, because a
+       * filing miss genuinely is fixed by re-reading the block and inviting a
+       * retry is the honest default for a failure nothing classified. A block
+       * is only ever recorded read off succeededBlocks, which the adapters feed
+       * strictly from validated output (KTD5, R26).
+       *
+       * `mergedSpans` stays at its zero default until the dedupe pass exists
+       * (U6); `configVersion` stays null until per-rubric config does (U10).
+       */
+      const attempted = [
+        ...result.succeededBlocks,
+        ...result.failedBlocks.map((f) => f.rubricKey),
+      ];
+      await tx.extractionBlockRun.deleteMany({
+        where: { callId, rubricKey: { in: attempted } },
+      });
+      await tx.extractionBlockRun.createMany({
+        data: [
+          ...result.succeededBlocks.map((rubricKey) => ({
+            callId,
+            rubricKey,
+            outcome: "READ" as const,
+            droppedQuotes: result.droppedByBlock[rubricKey]?.quotes ?? 0,
+            droppedClaims: result.droppedByBlock[rubricKey]?.claims ?? 0,
+          })),
+          ...result.failedBlocks.map((f) => ({
+            callId,
+            rubricKey: f.rubricKey,
+            outcome:
+              f.kind === "terminal"
+                ? ("FAILED_TERMINAL" as const)
+                : ("FAILED_RETRYABLE" as const),
+            reason: f.reason,
+          })),
+        ],
+      });
+
+      /**
        * A call is only "extracted" when every block was read.
        *
        * Marking it extracted after a partial run made the missing blocks
@@ -594,16 +642,16 @@ export async function runExtractionForCall(
      * Sized against the function's sixty-second ceiling, not chosen freely.
      *
      * The arithmetic that matters is the whole request, not this phase: extraction
-     * is bounded by BLOCK_TIMEOUT_MS (30s, concurrent across blocks), `maxWait` is
+     * is bounded by BLOCK_TIMEOUT_MS (40s, concurrent across blocks), `maxWait` is
      * spent *before* the transaction starts, and `timeout` bounds it once it has —
-     * so the two add rather than overlap. At 5 + 12 the worst case was 47s, and the
-     * remaining 13 had to cover a cold start, the Prisma connect, the session
+     * so the two add rather than overlap. At 5 + 12 the worst case was 57s, and the
+     * remaining 3 had to cover a cold start, the Prisma connect, the session
      * lookup, and the response. On a slow minute that does not fit, and the way it
      * fails is the worst one available: the function is killed rather than
      * returning, so no error reaches describeDatabaseFailure and the PM is told
      * only that something went wrong.
      *
-     * 2 + 8 puts the worst case at 40s. The writes are batched into four queries,
+     * 2 + 8 puts the worst case at 50s. The writes are a few batched statements,
      * so eight seconds is a failure ceiling and not an expected duration — and a
      * database too slow to start a transaction in two seconds is one this run
      * should give up on quickly and say so, rather than spend the request's

@@ -54,6 +54,14 @@ enum MappingConfidence {
   low
 }
 
+/// How one macro-dimension block fared in one extraction run (KTD16, R22).
+/// Hyphenated on the wire to match the record type, like OriginTag and Lens.
+enum ExtractionOutcome {
+  READ             @map("read")
+  FAILED_RETRYABLE @map("failed-retryable")
+  FAILED_TERMINAL  @map("failed-terminal")
+}
+
 /// Where a claim came from. Hyphenated on the wire to match the record type.
 enum OriginTag {
   founderVolunteered              @map("founder-volunteered")
@@ -148,6 +156,13 @@ model Call {
   /// onto a *different* deal — both are the behaviour R25 asks for.
   sourceMeetingId String?
 
+  /// When a run claimed this call for extraction (KTD17). Null when nothing
+  /// holds it. The column lands in the block-run migration so the plan carries
+  /// one migration, but the lease logic itself is U7's — nothing writes this yet.
+  extractionClaimedAt DateTime?
+
+  blockRuns ExtractionBlockRun[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -155,6 +170,45 @@ model Call {
   @@unique([dealId, sourceMeetingId])
   @@index([dealId])
   @@index([importedById])
+}
+
+/// What one extraction run did to one macro-dimension block of one call (KTD16).
+///
+/// This table, not `Call.extracted`, is the durable truth about a run: which
+/// blocks were read, which failed and why, and what verification dropped —
+/// legible after a refresh, which one boolean and a React state were not (R24).
+/// One row per block per call: a re-run replaces the rows for the blocks it
+/// attempted and leaves the others standing, mirroring the scoped observation
+/// delete in lib/services/capture.ts. `Call.extracted` stays, derived, so
+/// nothing that reads it breaks.
+model ExtractionBlockRun {
+  id     String @id @default(cuid())
+  callId String
+  call   Call   @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  /// Which macro-dimension block this row describes, from /framework.
+  rubricKey String
+  /// A block that returned no usable output is never recorded read — the
+  /// adapters throw on anything short of validated output (KTD5, R26), so the
+  /// orchestrator only ever observes read or failed.
+  outcome   ExtractionOutcome
+  /// Why the block failed, in the words the run reported. Null on a read block.
+  reason    String?
+
+  /// Quotes this block returned that were not verbatim in the transcript.
+  droppedQuotes Int @default(0)
+  /// Claims from this block whose anchor quote did not survive verification.
+  droppedClaims Int @default(0)
+  /// Duplicate spans merged away. Stays 0 until the dedupe pass lands (U6).
+  mergedSpans   Int @default(0)
+
+  /// Which extraction-config version the run read with. Null until per-rubric
+  /// config exists (U10).
+  configVersion Int?
+  ranAt         DateTime @default(now())
+
+  @@unique([callId, rubricKey])
+  @@index([callId])
 }
 
 /// A verbatim excerpt the machine drafted and the PM ruled on. Never a score.

@@ -12,6 +12,7 @@ import {
   createDeal,
   decideObservation,
   deleteCall,
+  deleteDeal,
   runExtractionForCall,
   setScore,
   updateDeal,
@@ -695,6 +696,191 @@ describe("extraction persistence", () => {
     await expect(
       runExtractionForCall(partner, callId, { client: stubClient({ observations: [], claims: [] }) }),
     ).resolves.toBeDefined();
+  });
+
+  /**
+   * KTD16. The run record is what survives a refresh: one row per block per
+   * call, written in the run's own transaction. Before it existed the failure
+   * list lived in one component's useState and the only durable trace was the
+   * `extracted` boolean, so a partial run stopped being legible the moment the
+   * page reloaded (R24).
+   */
+  describe("per-block run records", () => {
+    /** A client that fails exactly one block and answers the rest empty. */
+    const failingOn = (rubricKey: string, status: number): ExtractionClient => ({
+      messages: {
+        parse: async (params) => {
+          if (params.rubricKey === rubricKey) {
+            throw Object.assign(new Error("nope"), { status });
+          }
+          return { parsed_output: { observations: [], claims: [] }, stop_reason: "end_turn" };
+        },
+      },
+    });
+
+    it("a run where every block reads writes one read row per block", async () => {
+      const { callId } = await seedCall("Block Run Full Test");
+      await runExtractionForCall(pm, callId, {
+        client: stubClient({ observations: [verbatim], claims: [] }),
+      });
+
+      const rows = await db.extractionBlockRun.findMany({ where: { callId } });
+      expect(rows).toHaveLength(RUBRICS.length);
+      expect(new Set(rows.map((r) => r.rubricKey))).toEqual(new Set(RUBRICS.map((r) => r.key)));
+      for (const row of rows) {
+        expect(row.outcome).toBe("READ");
+        // A read block has no failure to explain.
+        expect(row.reason).toBeNull();
+        // Merges arrive with the dedupe pass (U6); config versions with U10.
+        expect(row.mergedSpans).toBe(0);
+        expect(row.configVersion).toBeNull();
+      }
+    });
+
+    /**
+     * R26's other face: only one block returned any observations above, and
+     * here none do — and "read it and there was nothing there" is still read.
+     * The failed states are reserved for blocks that returned no usable output,
+     * which the adapters signal by throwing (KTD5).
+     */
+    it("a block that read and found nothing is recorded read, not failed", async () => {
+      const { callId } = await seedCall("Block Run Empty Test");
+      await runExtractionForCall(pm, callId, {
+        client: stubClient({ observations: [], claims: [] }),
+      });
+
+      const rows = await db.extractionBlockRun.findMany({ where: { callId } });
+      expect(rows).toHaveLength(RUBRICS.length);
+      for (const row of rows) expect(row.outcome).toBe("READ");
+    });
+
+    it("a failed block's row carries the reason; the other five read", async () => {
+      const { callId } = await seedCall("Block Run Partial Test");
+      await runExtractionForCall(pm, callId, { client: failingOn("pt", 429) });
+
+      const rows = await db.extractionBlockRun.findMany({ where: { callId } });
+      expect(rows).toHaveLength(RUBRICS.length);
+      const failed = rows.find((r) => r.rubricKey === "pt");
+      expect(failed?.outcome).toBe("FAILED_RETRYABLE");
+      expect(failed?.reason).toMatch(/rate limited/);
+      expect(rows.filter((r) => r.outcome === "READ")).toHaveLength(RUBRICS.length - 1);
+
+      // The boolean stays, derived from the same run: not every block read.
+      expect((await db.call.findUniqueOrThrow({ where: { id: callId } })).extracted).toBe(false);
+    });
+
+    /**
+     * R22's two failure classes must not collapse: a retryable row invites the
+     * re-run that fixes it, a terminal one fails identically on every press.
+     * 404 is the terminal case a PM actually hits — a mistyped EXTRACTION_MODEL.
+     */
+    it("a terminal failure is recorded distinguishably from a retryable one", async () => {
+      const { callId } = await seedCall("Block Run Terminal Test");
+      await runExtractionForCall(pm, callId, { client: failingOn("gtm", 404) });
+
+      const failed = await db.extractionBlockRun.findFirstOrThrow({
+        where: { callId, rubricKey: "gtm" },
+      });
+      expect(failed.outcome).toBe("FAILED_TERMINAL");
+      expect(failed.reason).toMatch(/no model by that name/);
+    });
+
+    /**
+     * The replacement rule, which mirrors the scoped observation delete above:
+     * a re-run replaces the rows for the blocks it attempted — read *or*
+     * failed — and leaves every other row standing. The standing row is
+     * planted directly because the service reads every framework block today;
+     * per-rubric config (U10) is what will make a subset run reachable.
+     */
+    it("re-running replaces the attempted blocks' rows and leaves the others standing", async () => {
+      const { callId } = await seedCall("Block Run Replace Test");
+      await runExtractionForCall(pm, callId, {
+        client: stubClient({ observations: [verbatim], claims: [] }),
+      });
+      await db.extractionBlockRun.create({
+        data: { callId, rubricKey: "legacy-block", outcome: "READ" },
+      });
+      const before = await db.extractionBlockRun.findMany({ where: { callId } });
+      expect(before).toHaveLength(RUBRICS.length + 1);
+
+      await runExtractionForCall(pm, callId, { force: true, client: failingOn("pt", 429) });
+
+      const after = await db.extractionBlockRun.findMany({ where: { callId } });
+      expect(after).toHaveLength(RUBRICS.length + 1);
+      // The failed block was attempted, so its earlier read row is replaced —
+      // the record now says this block went unread, in this run's words.
+      expect(after.find((r) => r.rubricKey === "pt")?.outcome).toBe("FAILED_RETRYABLE");
+      // The block outside the run's read set keeps its exact row.
+      const legacy = after.find((r) => r.rubricKey === "legacy-block");
+      expect(legacy?.id).toBe(before.find((r) => r.rubricKey === "legacy-block")?.id);
+      expect(legacy?.outcome).toBe("READ");
+      // The attempted blocks' rows are this run's rows, not the first run's.
+      const beforeIds = new Set(before.map((r) => r.id));
+      for (const row of after.filter((r) => r.rubricKey !== "legacy-block")) {
+        expect(beforeIds.has(row.id)).toBe(false);
+      }
+
+      // A full re-run heals the record: the failed block reads, and the derived
+      // boolean flips back to true only now that every block read.
+      await runExtractionForCall(pm, callId, {
+        force: true,
+        client: stubClient({ observations: [], claims: [] }),
+      });
+      const healed = await db.extractionBlockRun.findFirstOrThrow({
+        where: { callId, rubricKey: "pt" },
+      });
+      expect(healed.outcome).toBe("READ");
+      expect((await db.call.findUniqueOrThrow({ where: { id: callId } })).extracted).toBe(true);
+    });
+
+    /**
+     * The verbatim guard's drops, attributed to the block that produced them —
+     * what the flat droppedQuotes list cannot say. The quality view (U9) and
+     * the tuning page (U11) both read these counts per block.
+     */
+    it("counts dropped quotes and claims against the block that produced them", async () => {
+      const { callId } = await seedCall("Block Run Drop Count Test");
+      const ftInvented = draft({
+        quote: "We are the category leader in reconciliation.",
+        rubricKey: "ft",
+        subDimensionKey: "earned-insight",
+      });
+      await runExtractionForCall(pm, callId, {
+        client: stubClient({
+          observations: [verbatim, paraphrased, ftInvented],
+          claims: [
+            {
+              text: "The matcher runs continuously.",
+              anchorQuote: paraphrased.quote,
+              originTag: "founder-volunteered",
+              rubricKey: "pt",
+            },
+          ],
+        }),
+      });
+
+      const rows = await db.extractionBlockRun.findMany({ where: { callId } });
+      const pt = rows.find((r) => r.rubricKey === "pt");
+      // The paraphrase was dropped, and the claim anchored to it went with it.
+      expect(pt?.droppedQuotes).toBe(1);
+      expect(pt?.droppedClaims).toBe(1);
+      const ft = rows.find((r) => r.rubricKey === "ft");
+      expect(ft?.droppedQuotes).toBe(1);
+      expect(ft?.droppedClaims).toBe(0);
+      // A block with nothing dropped says so.
+      expect(rows.find((r) => r.rubricKey === "gtm")?.droppedQuotes).toBe(0);
+    });
+
+    it("deleting the deal cascades the run records away", async () => {
+      const { dealId, callId } = await seedCall("Block Run Cascade Test");
+      await runExtractionForCall(pm, callId, {
+        client: stubClient({ observations: [verbatim], claims: [] }),
+      });
+      expect(await db.extractionBlockRun.count({ where: { callId } })).toBe(RUBRICS.length);
+
+      await deleteDeal(pm, dealId);
+      expect(await db.extractionBlockRun.count({ where: { callId } })).toBe(0);
+    });
   });
 });
 

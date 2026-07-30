@@ -77,6 +77,65 @@ describe("the seam returns what the front end already expects", () => {
 });
 
 /**
+ * KTD16. The per-block run record is what makes a partial extraction legible
+ * after a refresh (R24): which blocks went unread is read from the record, not
+ * from client state. The fixture round-trips above already pin the shape; these
+ * pin the semantics the fixtures were built to carry.
+ */
+describe("per-block extraction outcomes on the record", () => {
+  it("exposes a partial run's unread block with its reason, and derives extracted from it", async () => {
+    const call = (await getRecord("cirrus"))!.calls[0];
+    // The seeded partial-run path: one block failed, so the boolean is false.
+    expect(call.extracted).toBe(false);
+    const failed = call.blockRuns.filter((r) => r.outcome !== "read");
+    expect(failed).toHaveLength(1);
+    expect(failed[0].rubricKey).toBe("fl");
+    // Retryable, distinguishably — the UI may invite a re-run on this kind only.
+    expect(failed[0].outcome).toBe("failed-retryable");
+    expect(failed[0].reason).toMatch(/rate limited/);
+  });
+
+  it("marks every read block read, carrying its drop counts and no reason key", async () => {
+    const call = (await getRecord("halten"))!.calls[0];
+    expect(call.extracted).toBe(true);
+    expect(call.blockRuns).toHaveLength(6);
+    for (const run of call.blockRuns) {
+      expect(run.outcome).toBe("read");
+      // Absent rather than undefined-valued — absence means "nothing to
+      // explain", the same convention the import attribution argues for.
+      expect(Object.keys(run)).not.toContain("reason");
+      expect(Object.keys(run)).not.toContain("configVersion");
+    }
+    // The verbatim guard's work is on the record, attributed to its block.
+    expect(call.blockRuns.find((r) => r.rubricKey === "pm")?.droppedQuotes).toBe(1);
+  });
+
+  it("gives a call that has never been extracted an empty run list, not a missing one", async () => {
+    await db.deal.create({
+      data: {
+        id: "block-run-empty-fixture",
+        company: "Blockless",
+        oneLiner: "No extraction yet.",
+        founders: "Test Founder",
+        ownerPm: "You",
+        opened: new Date("2026-07-26"),
+        layer: "L1",
+        calls: {
+          create: { number: 1, label: "First", date: new Date("2026-07-26"), transcript: "t" },
+        },
+      },
+    });
+    try {
+      const call = (await getRecord("block-run-empty-fixture"))!.calls[0];
+      expect(call.blockRuns).toEqual([]);
+      expect(call.extracted).toBe(false);
+    } finally {
+      await db.deal.delete({ where: { id: "block-run-empty-fixture" } });
+    }
+  });
+});
+
+/**
  * KTD9. "Mine" is a `where` clause, not a filter over an already-fetched list,
  * so it stays correct as the deal count grows past what one page can hold.
  *

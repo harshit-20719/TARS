@@ -254,12 +254,21 @@ export async function runExtractionAction(
     claims: number;
     /** Quotes the model returned that were not literally in the transcript. */
     droppedQuotes: string[];
+    /** Claims dropped because their anchor quote did not survive verification. */
+    droppedClaims: number;
     /**
      * Macro-dimensions whose call failed. A partial run still writes the rest.
      * `kind` is what lets the button tell a failure a re-run can fix from one
      * it cannot (KTD6) — "terminal" must not render a re-run invitation.
      */
     failedBlocks: { label: string; reason: string; kind: string }[];
+    /**
+     * Macro-dimensions that answered this run — including "read, and nothing
+     * was there", which must never look like "never read" (R26). Computed all
+     * along to scope the re-run delete; surfaced so the run summary (U9) can
+     * say what was read rather than only what failed.
+     */
+    succeededBlocks: string[];
   }>
 > {
   try {
@@ -280,7 +289,11 @@ export async function runExtractionAction(
          * extraction looks like a quiet transcript.
          */
         droppedQuotes: summary.droppedQuotes,
+        // A count, not the texts: a dropped claim's anchor quote is already in
+        // droppedQuotes, so the texts would say the same thing twice.
+        droppedClaims: summary.droppedClaims.length,
         failedBlocks: summary.failedBlocks.map((f) => ({ label: f.label, reason: f.reason, kind: f.kind })),
+        succeededBlocks: summary.succeededBlocks,
       },
     };
   } catch (e) {

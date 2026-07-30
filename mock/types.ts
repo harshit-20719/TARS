@@ -70,6 +70,40 @@ export interface Call {
 }
 
 /**
+ * How one macro-dimension block fared in one extraction run (R22): read, failed
+ * but worth retrying, or failed for a reason retrying cannot fix.
+ */
+export type ExtractionOutcome = "read" | "failed-retryable" | "failed-terminal";
+
+/**
+ * What one extraction run did to one macro-dimension block of a call (KTD16).
+ *
+ * One entry per block per call — a re-run replaces the entries for the blocks
+ * it attempted and leaves the others standing — so a partial run stays legible
+ * after a refresh: which blocks went unread is read from here, never from
+ * client state (R24). A block that returned no usable output is never recorded
+ * "read" (R26); "read" with nothing filed means the block was read and the
+ * transcript had nothing for it.
+ */
+export interface ExtractionBlockRun {
+  /** Which macro-dimension block, from /framework. */
+  rubricKey: string;
+  outcome: ExtractionOutcome;
+  /** Why the block failed, in the run's words. Absent on a read block. */
+  reason?: string;
+  /** Quotes this block returned that were not verbatim in the transcript. */
+  droppedQuotes: number;
+  /** Claims from this block whose anchor quote did not survive verification. */
+  droppedClaims: number;
+  /** Duplicate spans merged away. Stays 0 until the dedupe pass lands. */
+  mergedSpans: number;
+  /** Which extraction-config version the run read with. Absent until tuning lands. */
+  configVersion?: number;
+  /** When the run recorded this outcome. */
+  ranAt: string;
+}
+
+/**
  * A call without its transcript.
  *
  * The record carries this instead of the full `Call`, and the split is a
@@ -84,6 +118,8 @@ export interface Call {
 export type CallMeta = Omit<Call, "transcript"> & {
   /** Length of the transcript, so the UI can say "40k characters" without loading them. */
   transcriptChars: number;
+  /** Per-block outcomes of extraction over this call. Empty until a run happens. */
+  blockRuns: ExtractionBlockRun[];
 };
 
 export interface Observation {
