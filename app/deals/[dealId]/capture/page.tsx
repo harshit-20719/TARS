@@ -29,7 +29,10 @@ export default async function CapturePage({ params }: { params: Promise<{ dealId
   return (
     <div className="page">
       <div className="page-head">
-        <span className="eyebrow">Step 3 · You author every score</span>
+        {/* Step 2 since review left the numbered flow (U9) — the sidebar numbers
+            by array position, so this text is the only place the number is
+            hardcoded and it must agree. */}
+        <span className="eyebrow">Step 2 · You author every score</span>
         <h1 className="page-title">Capture scoring</h1>
         <p className="page-lede">
           Score each sub-dimension 1–5 or pass/fail against the anchors shown. The evidence is already attached —

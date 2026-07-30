@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DealRecord, Observation } from "@/mock/types";
-import { progressOf, stepsFor } from "./steps";
+import { progressOf, stepsFor, viewsFor } from "./steps";
 
 /**
  * The outstanding-work count, redefined (KTD19).
@@ -87,19 +87,35 @@ describe("what counts as outstanding", () => {
 });
 
 describe("what the sidebar makes of it", () => {
-  const reviewStep = (rec: DealRecord) => stepsFor("d1", rec).find((s) => s.seg === "review")!;
+  /**
+   * Review left the numbered flow (R14). Nothing queues there any more, so
+   * "step 2, then done" stopped being true of it — it is a reading of the
+   * record now, like the floor and coverage, and the flow renumbers without it.
+   */
+  it("numbers the flow without review, consecutively", () => {
+    const steps = stepsFor("d1", record([obs()]));
+    expect(steps.map((s) => s.seg)).toEqual(["", "transcript", "capture", "judgment", "scorecard"]);
+  });
 
-  it("shows the unconfirmed count, and reads clear once it is ruled on", () => {
+  const reviewView = (rec: DealRecord) => viewsFor("d1", rec).find((v) => v.seg === "review")!;
+
+  it("registers the extraction-quality reading among the views, never done", () => {
+    // Like coverage (R20's reasoning): a quality reading must never read as a
+    // gate, so `done` stays false even when nothing is left unconfirmed.
+    expect(reviewView(record([obs({ confidence: "low" })])).done).toBe(false);
+    expect(reviewView(record([obs({ confidence: "high" })])).done).toBe(false);
+    expect(reviewView(record([])).done).toBe(false);
+  });
+
+  it("shows the unconfirmed count, and the none-form once everything is ruled on", () => {
     const unsure = obs({ confidence: "low" });
 
-    const before = reviewStep(record([unsure, obs({ confidence: "high" })]));
-    expect(before.state).toBe("1 to place");
-    expect(before.done).toBe(false);
+    const before = reviewView(record([unsure, obs({ confidence: "high" })]));
+    expect(before.state).toBe("1 unconfirmed");
 
-    const after = reviewStep(
+    const after = reviewView(
       record([{ ...unsure, decidedById: "u1" }, obs({ confidence: "high" })]),
     );
-    expect(after.state).toBe("clear");
-    expect(after.done).toBe(true);
+    expect(after.state).toBe("none unconfirmed");
   });
 });

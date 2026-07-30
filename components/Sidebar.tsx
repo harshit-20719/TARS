@@ -17,6 +17,7 @@ const VIEW_ICONS: Record<string, string> = {
   floor: "shield",
   claims: "ledger",
   coverage: "grid",
+  review: "pulse",
 };
 
 export function Sidebar({
@@ -26,7 +27,7 @@ export function Sidebar({
 }: {
   deal: Deal;
   steps: StepView[];
-  /** Cross-cutting readings of the record — the floor and the ledger. */
+  /** Cross-cutting readings of the record — floor, ledger, coverage, extraction quality. */
   views: StepView[];
 }) {
   const pathname = usePathname();

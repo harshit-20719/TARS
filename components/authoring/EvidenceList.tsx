@@ -105,11 +105,10 @@ export function EvidenceList({
             )}
             <span className="ev-actions">
               {/*
-                The confirm verb, in ReviewBoard's words for the same act. It is
-                the accepted decision with nothing else on it: sets the decider,
-                changes nothing — so on success the server re-renders the row
-                with `decidedById` set and this button leaves with the chip,
-                both being the same predicate.
+                The confirm verb — the accepted decision with nothing else on
+                it: sets the decider, changes nothing — so on success the
+                server re-renders the row with `decidedById` set and this
+                button leaves with the chip, both being the same predicate.
               */}
               {o.confidence === "low" && !o.decidedById && (
                 <button

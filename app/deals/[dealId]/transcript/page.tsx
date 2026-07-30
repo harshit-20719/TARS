@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { getCalls, getDeal, getRecord } from "@/lib/data";
+import { RUBRICS } from "@/framework";
 import { missingCredentialCopy, resolveProvider } from "@/lib/extraction/provider";
 import { AddCallForm } from "@/components/authoring/AddCallForm";
 import { ImportFromFireflies } from "@/components/authoring/ImportFromFireflies";
@@ -58,6 +59,15 @@ export default async function TranscriptPage({ params }: { params: Promise<{ dea
       ) : (
         calls.map((c) => {
           const drafted = rec.observations.filter((o) => o.callNumber === c.number).length;
+          /**
+           * How much of this call the last run left unread, from the persisted
+           * per-block record (R24) — so a partial run stays legible here after
+           * a refresh, where the PM stands when deciding whether to re-run.
+           * Zero entries means no run yet, which the button already says.
+           */
+          const runs = rec.calls.find((m) => m.id === c.id)?.blockRuns ?? [];
+          const unread =
+            runs.length === 0 ? 0 : RUBRICS.length - runs.filter((r) => r.outcome === "read").length;
           return (
             <div className="card" key={c.id}>
               <div className="card-head">
@@ -68,6 +78,12 @@ export default async function TranscriptPage({ params }: { params: Promise<{ dea
                   <span className="chip good">
                     <span className="dot" />
                     extracted
+                  </span>
+                )}
+                {unread > 0 && (
+                  <span className="chip warn">
+                    <span className="dot" />
+                    {unread} of {RUBRICS.length} blocks unread
                   </span>
                 )}
                 <div className="spacer" />

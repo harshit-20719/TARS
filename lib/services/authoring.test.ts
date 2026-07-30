@@ -292,9 +292,9 @@ describe("FounderTypeForm payloads", () => {
   });
 });
 
-describe("ReviewBoard payloads", () => {
+describe("decide payloads (the capture-page verbs)", () => {
   it("re-maps a draft to another row, carrying the rubric key with it", async () => {
-    // The board looks the rubric up from the chosen sub-dimension so the two
+    // EvidenceList looks the rubric up from the chosen sub-dimension so the two
     // cannot disagree; a mismatch would file the observation under a rubric it
     // does not belong to and hide it from that rubric's group.
     const dealId = await newDeal("Remap Test");

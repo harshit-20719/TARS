@@ -37,6 +37,8 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M4 9.5h16M4 15h16M10 4v16" />
     </>
   ),
+  /** Extraction quality — a trace of what the machine's last run did. */
+  pulse: <path d="M3 12h4l2.5-6.5 4.5 13 2.5-6.5H21" />,
 };
 
 export function Icon({ name, className = "i" }: { name: string; className?: string }) {

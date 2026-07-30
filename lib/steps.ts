@@ -87,20 +87,15 @@ export function stepsFor(dealId: string, rec: DealRecord): StepView[] {
     done,
     state,
   });
+  /**
+   * Review is not in here any more (R14). Nothing queues on that page — every
+   * observation files itself as evidence — so "visit it between transcript and
+   * capture, then be done" stopped being true of it. It re-registers below as a
+   * reading of the record, alongside the floor and coverage.
+   */
   return [
     mk("", "Overview", false, ""),
     mk("transcript", "Transcript & calls", p.hasTranscript, p.calls ? `${p.calls} call${p.calls > 1 ? "s" : ""}` : "—"),
-    /**
-     * Review is an exception queue now, so "done" means the queue is empty rather
-     * than that somebody visited the page — and a deal with no unsure mappings is
-     * done without anybody going there, which is the point of the change.
-     */
-    mk(
-      "review",
-      "Review exceptions",
-      p.hasDrafts && p.needsReview === 0,
-      p.needsReview > 0 ? `${p.needsReview} to place` : p.hasDrafts ? "clear" : "—",
-    ),
     mk("capture", "Capture scoring", p.total > 0 && p.scored >= p.total, `${p.scored}/${p.total}`),
     mk("judgment", "Judgment slides", p.slides >= p.totalSlides, `${p.slides}/${p.totalSlides}`),
     mk("scorecard", "Scorecard", false, p.scorecardReady ? "ready" : "—"),
@@ -110,10 +105,11 @@ export function stepsFor(dealId: string, rec: DealRecord): StepView[] {
 /**
  * Cross-cutting views, kept out of the numbered flow.
  *
- * The floor and the ledger are not steps — they are readings of the same record
- * from a different angle, and a PM visits them whenever the question comes up
- * rather than at a fixed point. Numbering them would imply an order that is not
- * real, and would make the flow eight steps long for no gain.
+ * The floor, the ledger, coverage, and extraction quality are not steps — they
+ * are readings of the same record from a different angle, and a PM visits them
+ * whenever the question comes up rather than at a fixed point. Numbering them
+ * would imply an order that is not real, and would make the flow eight steps
+ * long for no gain.
  */
 export function viewsFor(dealId: string, rec: DealRecord): StepView[] {
   const p = progressOf(rec);
@@ -153,6 +149,27 @@ export function viewsFor(dealId: string, rec: DealRecord): StepView[] {
        */
       done: false,
       state: p.unevidenced > 0 ? `${p.unevidenced} unevidenced` : "none unevidenced",
+    },
+    {
+      /**
+       * What the last extraction actually did — the reading the review step
+       * became (R14, KTD16). The segment keeps its old name so every stored
+       * link to /review still lands.
+       *
+       * The state carries the unconfirmed low-confidence count, the way
+       * coverage's carries its unevidenced one: five of six capture blocks
+       * render collapsed, so this is the one place the number stays visible
+       * without expanding them. Never done, like coverage — a quality reading
+       * must never read as a gate. And no `alert`: the floor's flags a
+       * kill-tripped deal, a verdict-shaped fact, while unconfirmed filings
+       * are ordinary work and a failed block already reads as such on the
+       * page and the transcript card (R23 — presented, not nagged about).
+       */
+      seg: "review",
+      name: "Extraction quality",
+      href: `${base}/review`,
+      done: false,
+      state: p.needsReview > 0 ? `${p.needsReview} unconfirmed` : "none unconfirmed",
     },
   ];
 }

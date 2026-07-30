@@ -38,45 +38,30 @@ const view = (over: Partial<StepView> & { seg: string }): StepView => ({
 const iconOf = (name: string) =>
   screen.getByRole("link", { name: new RegExp(name, "i") }).querySelector("svg[data-icon]");
 
+/** The four readings, as viewsFor registers them. */
+const ALL_VIEWS = [
+  view({ seg: "floor", name: "Floor check" }),
+  view({ seg: "claims", name: "Claim ledger" }),
+  view({ seg: "coverage", name: "Coverage" }),
+  view({ seg: "review", name: "Extraction quality" }),
+];
+
 describe("view icons", () => {
-  it("gives coverage its own icon rather than the claim ledger's", () => {
-    render(
-      <Sidebar
-        deal={deal}
-        steps={[]}
-        views={[
-          view({ seg: "floor", name: "Floor check" }),
-          view({ seg: "claims", name: "Claim ledger" }),
-          view({ seg: "coverage", name: "Coverage" }),
-        ]}
-      />,
-    );
+  it("gives every view its own icon rather than another's", () => {
+    render(<Sidebar deal={deal} steps={[]} views={ALL_VIEWS} />);
 
-    const coverage = iconOf("Coverage")?.getAttribute("data-icon");
-    const ledger = iconOf("Claim ledger")?.getAttribute("data-icon");
-    const floor = iconOf("Floor check")?.getAttribute("data-icon");
-
-    expect(coverage).toBeTruthy();
-    expect(coverage).not.toBe(ledger);
-    expect(coverage).not.toBe(floor);
-    expect(floor).toBe("shield");
-    expect(ledger).toBe("ledger");
+    const icons = ALL_VIEWS.map((v) => iconOf(v.name)?.getAttribute("data-icon"));
+    for (const icon of icons) expect(icon).toBeTruthy();
+    // All distinct — none silently borrowing the fallback.
+    expect(new Set(icons).size).toBe(ALL_VIEWS.length);
+    expect(iconOf("Floor check")?.getAttribute("data-icon")).toBe("shield");
+    expect(iconOf("Claim ledger")?.getAttribute("data-icon")).toBe("ledger");
   });
 
   it("renders an icon for every view, none falling through to nothing", () => {
-    render(
-      <Sidebar
-        deal={deal}
-        steps={[]}
-        views={[
-          view({ seg: "floor", name: "Floor check" }),
-          view({ seg: "claims", name: "Claim ledger" }),
-          view({ seg: "coverage", name: "Coverage" }),
-        ]}
-      />,
-    );
-    for (const name of ["Floor check", "Claim ledger", "Coverage"]) {
-      expect(iconOf(name)?.querySelector("path, circle")).toBeTruthy();
+    render(<Sidebar deal={deal} steps={[]} views={ALL_VIEWS} />);
+    for (const v of ALL_VIEWS) {
+      expect(iconOf(v.name)?.querySelector("path, circle")).toBeTruthy();
     }
   });
 });

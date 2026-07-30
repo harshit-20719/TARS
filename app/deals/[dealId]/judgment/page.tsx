@@ -41,7 +41,7 @@ export default async function JudgmentPage({ params }: { params: Promise<{ dealI
   return (
     <div className="page">
       <div className="page-head">
-        <span className="eyebrow">Step 4 · The human read</span>
+        <span className="eyebrow">Step 3 · The human read</span>
         <h1 className="page-title">Judgment slides</h1>
         <p className="page-lede">
           Each pillar and track carries a 0–10 slide you author under its lens. The app shows the rooted sub-scores

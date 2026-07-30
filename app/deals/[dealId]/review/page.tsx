@@ -1,81 +1,37 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getRecord } from "@/lib/data";
-import { ReviewBoard } from "@/components/ReviewBoard";
+import { ExtractionQualityBoard } from "@/components/ExtractionQualityBoard";
 
+/**
+ * Extraction quality — a reading of the record, not a step (R14).
+ *
+ * This page was the exception queue: step 2, where drafts waited for a person.
+ * Nothing waits any more — every observation files itself as evidence and the
+ * rulings live on the capture rows — so what the page answers now is the
+ * question the queue always hid: how well did the machine read each call? It
+ * renders from the per-block run record (KTD16), which is why a partial run is
+ * still legible here after a refresh (R24). The URL segment stays /review so
+ * every stored link keeps landing.
+ */
 export default async function ReviewPage({ params }: { params: Promise<{ dealId: string }> }) {
   const { dealId } = await params;
   const rec = await getRecord(dealId);
   if (!rec) notFound();
 
-  const counts = {
-    drafted: rec.observations.length,
-    needsPlacing: rec.observations.filter((o) => o.status === "draft").length,
-    filed: rec.observations.filter((o) => o.status === "accepted").length,
-    moved: rec.observations.filter((o) => o.status === "edited").length,
-    rejected: rec.observations.filter((o) => o.status === "rejected").length,
-  };
-
   return (
     <div className="page">
       <div className="page-head">
-        <span className="eyebrow">Step 2 · Only what the machine could not place</span>
-        <h1 className="page-title">Review exceptions</h1>
+        <span className="eyebrow">View · What the last extraction did</span>
+        <h1 className="page-title">Extraction quality</h1>
         <p className="page-lede">
-          Confidently mapped observations are already cited as evidence on their rows — you do not need to approve
-          them. What waits here is the quotes the machine placed but was unsure about. You can still reject or move
-          any quote from the capture row it sits on.
+          How the machine read each call, block by block: what it read, what failed and why, and what it
+          returned that was thrown out before filing. Everything that survived is already cited on its
+          capture row — confirming, moving, or rejecting a filing happens there, on the quote itself. This
+          page reports; it changes nothing.
         </p>
       </div>
 
-      <>
-          <div className="summary" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))" }}>
-            <div className="cell">
-              <span className="k">Extracted</span>
-              <span className="v">{counts.drafted}</span>
-            </div>
-            <div className="cell">
-              <span className="k">To place</span>
-              <span className="v" style={{ color: counts.needsPlacing ? "var(--warn)" : "var(--good)" }}>
-                {counts.needsPlacing}
-              </span>
-            </div>
-            <div className="cell">
-              <span className="k">Filed as evidence</span>
-              <span className="v" style={{ color: "var(--good)" }}>
-                {counts.filed}
-              </span>
-            </div>
-            <div className="cell">
-              <span className="k">Moved by you</span>
-              <span className="v">{counts.moved}</span>
-            </div>
-            <div className="cell">
-              <span className="k">Rejected</span>
-              <span className="v mut">{counts.rejected}</span>
-            </div>
-            <div className="cell">
-              <span className="k">Claims</span>
-              <span className="v">{rec.claims.length}</span>
-            </div>
-          </div>
-
-          {/*
-            The claim ledger used to sit here as a second column, showing each
-            claim's anchor as a raw database id. It now has its own page, which
-            shows the quote instead — so this page is the exception queue and
-            nothing else, and there is only one ledger to trust.
-          */}
-          <ReviewBoard dealId={dealId} observations={rec.observations} />
-
-          {rec.claims.length > 0 && (
-            <div className="card-note" style={{ marginTop: 14 }}>
-              {rec.claims.length} claim{rec.claims.length === 1 ? "" : "s"} were drafted alongside these
-              observations. They live in the{" "}
-              <Link href={`/deals/${dealId}/claims`}>claim ledger</Link>, with the quote each one rests on.
-            </div>
-          )}
-      </>
+      <ExtractionQualityBoard dealId={dealId} calls={rec.calls} observations={rec.observations} />
     </div>
   );
 }
