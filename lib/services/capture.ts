@@ -380,6 +380,18 @@ export async function reassignDeal(actor: Actor, dealId: string, raw: unknown) {
 
 // --------------------------------------------------------------- extraction
 
+/**
+ * How long a claim on a call's extraction stays live (KTD17).
+ *
+ * Sized to the function ceiling and to nothing else: the platform kills a
+ * request at sixty seconds with no error path — no catch runs, so a killed
+ * run cannot release what it holds. A claim older than the ceiling therefore
+ * cannot belong to a run that is still alive, and the next run takes it over
+ * rather than honouring it. That expiry, not any cleanup code, is what keeps
+ * a killed run from locking its call forever.
+ */
+const EXTRACTION_CLAIM_TTL_MS = 60_000;
+
 export interface RunExtractionOptions {
   client?: ExtractionClient;
   model?: string;
@@ -428,377 +440,440 @@ export async function runExtractionForCall(
     );
   }
 
-  const result = await extractFromTranscript(
-    {
-      transcript: call.transcript,
-      callNumber: call.number,
-      company: call.deal.company,
-      callLabel: call.label,
+  /**
+   * Claim the call before the fan-out (KTD17, R16).
+   *
+   * The extracted check above is a read, and a read cannot hold anything
+   * across the network work that follows — the same reasoning that made the
+   * duplicate-meeting rule a unique index rather than a lookup. Two people
+   * pressing extract in the same second would both pass it, spend forty
+   * seconds of model time each, and then interleave their transactions over
+   * the same rows. The claim is a conditional update instead: exactly one of
+   * the two writes the stamp, and the other is refused here, before anything
+   * has been spent. A stale claim — older than the ceiling, so its run is
+   * dead (see the constant) — is taken over in the same statement.
+   */
+  const claimStamp = new Date();
+  const claimed = await db.call.updateMany({
+    where: {
+      id: callId,
+      OR: [
+        { extractionClaimedAt: null },
+        {
+          extractionClaimedAt: {
+            lt: new Date(claimStamp.getTime() - EXTRACTION_CLAIM_TTL_MS),
+          },
+        },
+      ],
     },
-    { client: options.client, model: options.model },
-  );
+    data: { extractionClaimedAt: claimStamp },
+  });
+  if (claimed.count === 0) {
+    // Not the already-extracted refusal: that one is about work already done,
+    // this one is about work happening right now, and the PM's next move
+    // differs — wait, rather than reach for force.
+    throw new RuleViolation(
+      "an extraction is already running against this call; a run that never finished " +
+        `is treated as abandoned after ${EXTRACTION_CLAIM_TTL_MS / 1000} seconds — try again then`,
+      "callId",
+    );
+  }
 
-  /**
-   * Batched, and given a longer ceiling than the default.
-   *
-   * The first version wrote one row per round trip inside the transaction — a
-   * couple of dozen sequential queries against a connection that goes through
-   * Prisma Postgres's proxy. Prisma's interactive transactions time out after
-   * five seconds by default, so a slow network turned a successful extraction
-   * into a failed write, and the model tokens were paid for either way. A few
-   * batched statements instead of N, and a ceiling that a bad minute cannot reach.
-   */
-  /**
-   * Rows written by this run, so the re-run delete and the id lookup can both
-   * address exactly them.
-   *
-   * This used to be `status: "draft"` for both, which worked only because every
-   * machine-written row was a draft. They are not any more — a confidently mapped
-   * observation is written already accepted (see below) — so the marker has to be
-   * something else. `confidence: { not: null }` is that marker: it is set on
-   * everything the machine files and on nothing a human does, including a re-map,
-   * which clears it.
-   */
-  const machineWritten: Prisma.ObservationWhereInput = {
-    dealId: call.dealId,
-    callNumber: call.number,
-    decidedById: null,
+  try {
+    const result = await extractFromTranscript(
+      {
+        transcript: call.transcript,
+        callNumber: call.number,
+        company: call.deal.company,
+        callLabel: call.label,
+      },
+      { client: options.client, model: options.model },
+    );
+
     /**
-     * Either marker identifies an undecided machine row. `confidence` is set on
-     * everything this version writes, but rows written before that column existed
-     * have it null — and matching only on `confidence` left them behind on a
-     * re-run, so the next extraction duplicated them instead of replacing them.
+     * Batched, and given a longer ceiling than the default.
+     *
+     * The first version wrote one row per round trip inside the transaction — a
+     * couple of dozen sequential queries against a connection that goes through
+     * Prisma Postgres's proxy. Prisma's interactive transactions time out after
+     * five seconds by default, so a slow network turned a successful extraction
+     * into a failed write, and the model tokens were paid for either way. A few
+     * batched statements instead of N, and a ceiling that a bad minute cannot reach.
      */
-    OR: [{ confidence: { not: null } }, { status: "draft" }],
-  };
-
-  /**
-   * Only the blocks this run actually re-read.
-   *
-   * Scoping the delete is what makes a retry after a partial failure safe. The
-   * delete used to cover the whole call, so re-running when five of six blocks had
-   * succeeded and one had failed would remove the five blocks' evidence and write
-   * back only the sixth — destroying real work while looking like a normal retry,
-   * which is exactly what the button invites the PM to do.
-   */
-  const rewritten: Prisma.ObservationWhereInput = {
-    ...machineWritten,
-    rubricKey: { in: result.succeededBlocks },
-  };
-
-  const written = await db.$transaction(
-    async (tx) => {
+    /**
+     * Rows written by this run, so the re-run delete and the id lookup can both
+     * address exactly them.
+     *
+     * This used to be `status: "draft"` for both, which worked only because every
+     * machine-written row was a draft. They are not any more — a confidently mapped
+     * observation is written already accepted (see below) — so the marker has to be
+     * something else. `confidence: { not: null }` is that marker: it is set on
+     * everything the machine files and on nothing a human does, including a re-map,
+     * which clears it.
+     */
+    const machineWritten: Prisma.ObservationWhereInput = {
+      dealId: call.dealId,
+      callNumber: call.number,
+      decidedById: null,
       /**
-       * Clear this run's own previous rows, and nothing else. A row the PM has
-       * ruled on carries `decidedById`, so it survives — silently discarding a
-       * review pass is the one thing a re-extract must not do.
+       * Either marker identifies an undecided machine row. `confidence` is set on
+       * everything this version writes, but rows written before that column existed
+       * have it null — and matching only on `confidence` left them behind on a
+       * re-run, so the next extraction duplicated them instead of replacing them.
        */
-      await tx.observation.deleteMany({ where: rewritten });
+      OR: [{ confidence: { not: null } }, { status: "draft" }],
+    };
 
-      /**
-       * Quotes a human has already ruled on, so the machine cannot undo them.
-       *
-       * A rejected observation survives the delete above (it carries `decidedById`),
-       * and without this the re-run wrote the same quote again — filed `accepted`
-       * when confidence was high, and auto-cited as evidence. The PM's rejection
-       * was reversed by a machine, which is the one thing the authorship rule
-       * exists to prevent.
-       */
-      const decided = await tx.observation.findMany({
-        where: { dealId: call.dealId, callNumber: call.number, decidedById: { not: null } },
-        select: { quote: true },
-      });
-      const alreadyRuledOn = new Set(decided.map((o) => normaliseForComparison(o.quote)));
+    /**
+     * Only the blocks this run actually re-read.
+     *
+     * Scoping the delete is what makes a retry after a partial failure safe. The
+     * delete used to cover the whole call, so re-running when five of six blocks had
+     * succeeded and one had failed would remove the five blocks' evidence and write
+     * back only the sixth — destroying real work while looking like a normal retry,
+     * which is exactly what the button invites the PM to do.
+     */
+    const rewritten: Prisma.ObservationWhereInput = {
+      ...machineWritten,
+      rubricKey: { in: result.succeededBlocks },
+    };
 
-      const fresh = result.observations.filter(
-        (o) => !alreadyRuledOn.has(normaliseForComparison(o.quote)),
-      );
-
-      /**
-       * The one-span invariant, held across partial re-runs (R10).
-       *
-       * The in-memory pass (lib/extraction/dedupe.ts) has already collapsed
-       * collisions *within* this run — but a re-run only rewrites the blocks
-       * it read, so a span this run files may already be standing in a block
-       * outside its read set, where the scoped delete above cannot see it.
-       * Without this comparison, pressing re-run after a partial failure
-       * reinserts that span as a second filing — the exact state the dedupe
-       * exists to prevent.
-       *
-       * One indexed read (dealId + callNumber) of the call's undecided
-       * machine rows in unread blocks, then the same contest the in-memory
-       * pass runs: higher confidence wins, rubric order breaks ties
-       * (`compareFilings`, the one rule in one home). Decided rows are not
-       * read — a human ruling outranks the machine, and `alreadyRuledOn`
-       * has already kept this run's drafts off those quotes.
-       */
-      const incumbents = await tx.observation.findMany({
-        where: { ...machineWritten, rubricKey: { notIn: result.succeededBlocks } },
-        select: { id: true, quote: true, rubricKey: true, confidence: true },
-      });
-      const incumbentsBySpan = new Map<string, typeof incumbents>();
-      for (const row of incumbents) {
-        const span = normaliseForComparison(row.quote);
-        const group = incumbentsBySpan.get(span);
-        if (group) group.push(row);
-        else incumbentsBySpan.set(span, [row]);
-      }
-
-      /** Newcomers a persisted filing beat — never created. */
-      const beatenNewcomers = new Set<(typeof fresh)[number]>();
-      /** Persisted losers → the newcomer whose id is only known after the insert. */
-      const dethronedByNewcomer: { ids: string[]; winnerKey: string }[] = [];
-      /** Persisted losers → a persisted winner, both ids already known. */
-      const dethronedByIncumbent: { ids: string[]; winnerId: string }[] = [];
-      /** Anchor-map entries pointing a beaten newcomer's claims at the incumbent. */
-      const incumbentAnchors: { key: string; id: string }[] = [];
-      /** Cross-run merges, attributed to the colliding block this run read. */
-      const crossMergedByBlock: Record<string, number> = {};
-
-      for (const o of fresh) {
-        const contested = incumbentsBySpan.get(normaliseForComparison(o.quote));
-        if (!contested?.length) continue;
-
-        const best = contested.reduce((a, b) => (compareFilings(b, a) < 0 ? b : a));
+    const written = await db.$transaction(
+      async (tx) => {
         /**
-         * However the contest goes, one filing survives out of the newcomer
-         * plus `contested`, so exactly `contested.length` filings merge away.
-         * Counted on the run row of the block this run read — the unread
-         * blocks' run rows describe their own runs and are left standing,
-         * like everything else about those blocks.
+         * Clear this run's own previous rows, and nothing else. A row the PM has
+         * ruled on carries `decidedById`, so it survives — silently discarding a
+         * review pass is the one thing a re-extract must not do.
          */
-        crossMergedByBlock[o.rubricKey] =
-          (crossMergedByBlock[o.rubricKey] ?? 0) + contested.length;
+        await tx.observation.deleteMany({ where: rewritten });
 
-        if (compareFilings(o, best) < 0) {
-          // The newcomer wins: every persisted filing of this span goes, its
-          // claims repointed to the newcomer once the insert gives it an id.
-          dethronedByNewcomer.push({
-            ids: contested.map((r) => r.id),
-            winnerKey: anchorKey(o.rubricKey, o.quote),
-          });
-        } else {
-          // The incumbent stands: the newcomer is dropped before it is ever
-          // written, and its claims anchor to the incumbent instead. Any
-          // *other* persisted filings of the span (legacy duplicates from
-          // before the dedupe existed) fold into the winner too.
-          beatenNewcomers.add(o);
-          incumbentAnchors.push({ key: anchorKey(o.rubricKey, o.quote), id: best.id });
-          const alsoLosing = contested.filter((r) => r.id !== best.id);
-          if (alsoLosing.length) {
-            dethronedByIncumbent.push({ ids: alsoLosing.map((r) => r.id), winnerId: best.id });
+        /**
+         * Quotes a human has already ruled on, so the machine cannot undo them.
+         *
+         * A rejected observation survives the delete above (it carries `decidedById`),
+         * and without this the re-run wrote the same quote again — filed `accepted`
+         * when confidence was high, and auto-cited as evidence. The PM's rejection
+         * was reversed by a machine, which is the one thing the authorship rule
+         * exists to prevent.
+         */
+        const decided = await tx.observation.findMany({
+          where: { dealId: call.dealId, callNumber: call.number, decidedById: { not: null } },
+          select: { quote: true },
+        });
+        const alreadyRuledOn = new Set(decided.map((o) => normaliseForComparison(o.quote)));
+
+        const fresh = result.observations.filter(
+          (o) => !alreadyRuledOn.has(normaliseForComparison(o.quote)),
+        );
+
+        /**
+         * The one-span invariant, held across partial re-runs (R10).
+         *
+         * The in-memory pass (lib/extraction/dedupe.ts) has already collapsed
+         * collisions *within* this run — but a re-run only rewrites the blocks
+         * it read, so a span this run files may already be standing in a block
+         * outside its read set, where the scoped delete above cannot see it.
+         * Without this comparison, pressing re-run after a partial failure
+         * reinserts that span as a second filing — the exact state the dedupe
+         * exists to prevent.
+         *
+         * One indexed read (dealId + callNumber) of the call's undecided
+         * machine rows in unread blocks, then the same contest the in-memory
+         * pass runs: higher confidence wins, rubric order breaks ties
+         * (`compareFilings`, the one rule in one home). Decided rows are not
+         * read — a human ruling outranks the machine, and `alreadyRuledOn`
+         * has already kept this run's drafts off those quotes.
+         */
+        const incumbents = await tx.observation.findMany({
+          where: { ...machineWritten, rubricKey: { notIn: result.succeededBlocks } },
+          select: { id: true, quote: true, rubricKey: true, confidence: true },
+        });
+        const incumbentsBySpan = new Map<string, typeof incumbents>();
+        for (const row of incumbents) {
+          const span = normaliseForComparison(row.quote);
+          const group = incumbentsBySpan.get(span);
+          if (group) group.push(row);
+          else incumbentsBySpan.set(span, [row]);
+        }
+
+        /** Newcomers a persisted filing beat — never created. */
+        const beatenNewcomers = new Set<(typeof fresh)[number]>();
+        /** Persisted losers → the newcomer whose id is only known after the insert. */
+        const dethronedByNewcomer: { ids: string[]; winnerKey: string }[] = [];
+        /** Persisted losers → a persisted winner, both ids already known. */
+        const dethronedByIncumbent: { ids: string[]; winnerId: string }[] = [];
+        /** Anchor-map entries pointing a beaten newcomer's claims at the incumbent. */
+        const incumbentAnchors: { key: string; id: string }[] = [];
+        /** Cross-run merges, attributed to the colliding block this run read. */
+        const crossMergedByBlock: Record<string, number> = {};
+
+        for (const o of fresh) {
+          const contested = incumbentsBySpan.get(normaliseForComparison(o.quote));
+          if (!contested?.length) continue;
+
+          const best = contested.reduce((a, b) => (compareFilings(b, a) < 0 ? b : a));
+          /**
+           * However the contest goes, one filing survives out of the newcomer
+           * plus `contested`, so exactly `contested.length` filings merge away.
+           * Counted on the run row of the block this run read — the unread
+           * blocks' run rows describe their own runs and are left standing,
+           * like everything else about those blocks.
+           */
+          crossMergedByBlock[o.rubricKey] =
+            (crossMergedByBlock[o.rubricKey] ?? 0) + contested.length;
+
+          if (compareFilings(o, best) < 0) {
+            // The newcomer wins: every persisted filing of this span goes, its
+            // claims repointed to the newcomer once the insert gives it an id.
+            dethronedByNewcomer.push({
+              ids: contested.map((r) => r.id),
+              winnerKey: anchorKey(o.rubricKey, o.quote),
+            });
+          } else {
+            // The incumbent stands: the newcomer is dropped before it is ever
+            // written, and its claims anchor to the incumbent instead. Any
+            // *other* persisted filings of the span (legacy duplicates from
+            // before the dedupe existed) fold into the winner too.
+            beatenNewcomers.add(o);
+            incumbentAnchors.push({ key: anchorKey(o.rubricKey, o.quote), id: best.id });
+            const alsoLosing = contested.filter((r) => r.id !== best.id);
+            if (alsoLosing.length) {
+              dethronedByIncumbent.push({ ids: alsoLosing.map((r) => r.id), winnerId: best.id });
+            }
           }
         }
-      }
 
-      const toCreate = fresh.filter((o) => !beatenNewcomers.has(o));
+        const toCreate = fresh.filter((o) => !beatenNewcomers.has(o));
 
-      await tx.observation.createMany({
-        data: toCreate.map((o) => ({
-          dealId: call.dealId,
-          callNumber: call.number,
-          rubricKey: o.rubricKey,
-          subDimensionKey: o.subDimensionKey,
-          quote: o.quote,
-          speaker: o.speaker,
-          timestamp: o.timestamp,
-          /**
-           * A confident mapping files itself.
-           *
-           * The framework reserves *scoring* for the PM (spec R5). It does not ask
-           * them to hand-approve each quote, and treating it as though it did turned
-           * seven screening calls a week into clerical work: a PM confirming that a
-           * quote about a paying customer belongs under the customer row is not
-           * exercising judgment, they are doing data entry. So a high-confidence
-           * mapping lands as evidence directly, and an unsure one waits as a draft
-           * in the exception queue. The PM's attention goes on the score, which is
-           * the part only they can do — and re-mapping stays available in place, so
-           * nothing is locked in.
-           */
-          status: o.confidence === "high" ? ("accepted" as const) : ("draft" as const),
-          confidence: o.confidence,
-          mappingNote: o.mappingNote,
-          layer: "L1" as const,
-        })),
-      });
-
-      // createMany does not return ids, and claims need one to anchor to.
-      const persisted = await tx.observation.findMany({
-        where: rewritten,
-        select: { id: true, quote: true, rubricKey: true },
-      });
-      /**
-       * Keyed on block *and* quote — `anchorKey`, the same key the verbatim
-       * guard's kept-set and the dedupe's repointing use, so a claim that
-       * survived extraction is by construction one this map can place. Keyed
-       * on the quote alone, the map kept whichever row the database returned
-       * last, and a claim could anchor to a different block's observation.
-       *
-       * Seeded from this run's rows, then extended with the incumbents that
-       * beat this run's filings — a claim whose anchor lost the cross-run
-       * contest anchors to the filing that survived it (KTD11).
-       */
-      const quoteToId = new Map(
-        persisted.map((o) => [anchorKey(o.rubricKey, o.quote), o.id]),
-      );
-      for (const { key, id } of incumbentAnchors) quoteToId.set(key, id);
-
-      /**
-       * Dethroned incumbents leave, their claims first (KTD11). The order is
-       * the whole point: Claim.anchorObs cascades on delete, so a claim still
-       * anchored to a loser when the delete lands is silently destroyed with
-       * it. Repointing runs strictly before the delete — and the newcomer
-       * side of each repoint resolves through the map above, which the insert
-       * has already populated by now.
-       */
-      const dethronedIds: string[] = [];
-      for (const d of dethronedByNewcomer) {
-        const winnerId = quoteToId.get(d.winnerKey);
-        // The winner was in this run's insert, so it is always in the map;
-        // guarded so an impossible miss keeps the incumbent rather than
-        // cascading its claims away with nothing to catch them.
-        if (!winnerId) continue;
-        await tx.claim.updateMany({
-          where: { anchorObsId: { in: d.ids } },
-          data: { anchorObsId: winnerId },
-        });
-        dethronedIds.push(...d.ids);
-      }
-      for (const d of dethronedByIncumbent) {
-        await tx.claim.updateMany({
-          where: { anchorObsId: { in: d.ids } },
-          data: { anchorObsId: d.winnerId },
-        });
-        dethronedIds.push(...d.ids);
-      }
-      if (dethronedIds.length) {
-        await tx.observation.deleteMany({ where: { id: { in: dethronedIds } } });
-      }
-
-      const claimRows = result.claims.flatMap((c) => {
-        const anchorObsId = quoteToId.get(anchorKey(c.rubricKey, c.anchorQuote));
-        // The verbatim guard keys claims the way this map does, so nothing
-        // lands here unplaced by mistake any more. What still does, by
-        // design: a claim whose quote a human already ruled on, so the
-        // observation was deliberately not re-created.
-        if (!anchorObsId) return [];
-        return [
-          {
+        await tx.observation.createMany({
+          data: toCreate.map((o) => ({
             dealId: call.dealId,
-            text: c.text,
-            originTag:
-              c.originTag === "founder-volunteered"
-                ? ("founderVolunteered" as const)
-                : c.originTag === "founder-confirmed-after-PM-framing"
-                  ? ("founderConfirmedAfterPmFraming" as const)
-                  : ("machineInferred" as const),
-            // Every claim opens unverified at L1 — validated/refuted are L2.
-            status: "claimed" as const,
-            anchorObsId,
-          },
+            callNumber: call.number,
+            rubricKey: o.rubricKey,
+            subDimensionKey: o.subDimensionKey,
+            quote: o.quote,
+            speaker: o.speaker,
+            timestamp: o.timestamp,
+            /**
+             * A confident mapping files itself.
+             *
+             * The framework reserves *scoring* for the PM (spec R5). It does not ask
+             * them to hand-approve each quote, and treating it as though it did turned
+             * seven screening calls a week into clerical work: a PM confirming that a
+             * quote about a paying customer belongs under the customer row is not
+             * exercising judgment, they are doing data entry. So a high-confidence
+             * mapping lands as evidence directly, and an unsure one waits as a draft
+             * in the exception queue. The PM's attention goes on the score, which is
+             * the part only they can do — and re-mapping stays available in place, so
+             * nothing is locked in.
+             */
+            status: o.confidence === "high" ? ("accepted" as const) : ("draft" as const),
+            confidence: o.confidence,
+            mappingNote: o.mappingNote,
+            layer: "L1" as const,
+          })),
+        });
+
+        // createMany does not return ids, and claims need one to anchor to.
+        const persisted = await tx.observation.findMany({
+          where: rewritten,
+          select: { id: true, quote: true, rubricKey: true },
+        });
+        /**
+         * Keyed on block *and* quote — `anchorKey`, the same key the verbatim
+         * guard's kept-set and the dedupe's repointing use, so a claim that
+         * survived extraction is by construction one this map can place. Keyed
+         * on the quote alone, the map kept whichever row the database returned
+         * last, and a claim could anchor to a different block's observation.
+         *
+         * Seeded from this run's rows, then extended with the incumbents that
+         * beat this run's filings — a claim whose anchor lost the cross-run
+         * contest anchors to the filing that survived it (KTD11).
+         */
+        const quoteToId = new Map(
+          persisted.map((o) => [anchorKey(o.rubricKey, o.quote), o.id]),
+        );
+        for (const { key, id } of incumbentAnchors) quoteToId.set(key, id);
+
+        /**
+         * Dethroned incumbents leave, their claims first (KTD11). The order is
+         * the whole point: Claim.anchorObs cascades on delete, so a claim still
+         * anchored to a loser when the delete lands is silently destroyed with
+         * it. Repointing runs strictly before the delete — and the newcomer
+         * side of each repoint resolves through the map above, which the insert
+         * has already populated by now.
+         */
+        const dethronedIds: string[] = [];
+        for (const d of dethronedByNewcomer) {
+          const winnerId = quoteToId.get(d.winnerKey);
+          // The winner was in this run's insert, so it is always in the map;
+          // guarded so an impossible miss keeps the incumbent rather than
+          // cascading its claims away with nothing to catch them.
+          if (!winnerId) continue;
+          await tx.claim.updateMany({
+            where: { anchorObsId: { in: d.ids } },
+            data: { anchorObsId: winnerId },
+          });
+          dethronedIds.push(...d.ids);
+        }
+        for (const d of dethronedByIncumbent) {
+          await tx.claim.updateMany({
+            where: { anchorObsId: { in: d.ids } },
+            data: { anchorObsId: d.winnerId },
+          });
+          dethronedIds.push(...d.ids);
+        }
+        if (dethronedIds.length) {
+          await tx.observation.deleteMany({ where: { id: { in: dethronedIds } } });
+        }
+
+        const claimRows = result.claims.flatMap((c) => {
+          const anchorObsId = quoteToId.get(anchorKey(c.rubricKey, c.anchorQuote));
+          // The verbatim guard keys claims the way this map does, so nothing
+          // lands here unplaced by mistake any more. What still does, by
+          // design: a claim whose quote a human already ruled on, so the
+          // observation was deliberately not re-created.
+          if (!anchorObsId) return [];
+          return [
+            {
+              dealId: call.dealId,
+              text: c.text,
+              originTag:
+                c.originTag === "founder-volunteered"
+                  ? ("founderVolunteered" as const)
+                  : c.originTag === "founder-confirmed-after-PM-framing"
+                    ? ("founderConfirmedAfterPmFraming" as const)
+                    : ("machineInferred" as const),
+              // Every claim opens unverified at L1 — validated/refuted are L2.
+              status: "claimed" as const,
+              anchorObsId,
+            },
+          ];
+        });
+        if (claimRows.length) await tx.claim.createMany({ data: claimRows });
+
+        /**
+         * The run's durable record (KTD16): one row per block this run attempted,
+         * replacing that block's previous row and leaving every other block's row
+         * standing — the same scoping as the observation delete above, so the
+         * record and the evidence it describes move together. A failed block was
+         * attempted too: its row is replaced with the failure, which is what makes
+         * "which blocks went unread" readable after a refresh instead of living in
+         * one component's state (R24).
+         *
+         * The failure kinds fold to the record's two classes (R22): "terminal"
+         * fails identically on every press and is recorded as such; everything
+         * else — retryable, filing, unknown — is recorded retryable, because a
+         * filing miss genuinely is fixed by re-reading the block and inviting a
+         * retry is the honest default for a failure nothing classified. A block
+         * is only ever recorded read off succeededBlocks, which the adapters feed
+         * strictly from validated output (KTD5, R26).
+         *
+         * `mergedSpans` is the block's losing filings from the in-memory pass
+         * plus the cross-run collisions above, attributed to the in-run block
+         * (see the contest for why). `configVersion` stays null until
+         * per-rubric config exists (U10).
+         */
+        const attempted = [
+          ...result.succeededBlocks,
+          ...result.failedBlocks.map((f) => f.rubricKey),
         ];
-      });
-      if (claimRows.length) await tx.claim.createMany({ data: claimRows });
+        await tx.extractionBlockRun.deleteMany({
+          where: { callId, rubricKey: { in: attempted } },
+        });
+        await tx.extractionBlockRun.createMany({
+          data: [
+            ...result.succeededBlocks.map((rubricKey) => ({
+              callId,
+              rubricKey,
+              outcome: "READ" as const,
+              droppedQuotes: result.droppedByBlock[rubricKey]?.quotes ?? 0,
+              droppedClaims: result.droppedByBlock[rubricKey]?.claims ?? 0,
+              mergedSpans:
+                (result.mergedByBlock[rubricKey] ?? 0) + (crossMergedByBlock[rubricKey] ?? 0),
+            })),
+            ...result.failedBlocks.map((f) => ({
+              callId,
+              rubricKey: f.rubricKey,
+              outcome:
+                f.kind === "terminal"
+                  ? ("FAILED_TERMINAL" as const)
+                  : ("FAILED_RETRYABLE" as const),
+              reason: f.reason,
+            })),
+          ],
+        });
 
+        /**
+         * A call is only "extracted" when every block was read.
+         *
+         * Marking it extracted after a partial run made the missing blocks
+         * indistinguishable from blocks that genuinely had nothing in them: the
+         * failure list lived only in the button's local state, so one refresh and the
+         * transcript page showed a plain green chip over an incomplete read.
+         */
+        await tx.call.update({
+          where: { id: callId },
+          data: { extracted: result.failedBlocks.length === 0 },
+        });
+
+        return {
+          observationsWritten: persisted.length,
+          claimsWritten: claimRows.length,
+          /** Re-created quotes the PM had already ruled on, and so were skipped. */
+          skippedAlreadyRuledOn: result.observations.length - fresh.length,
+          /** In-run merges plus the cross-run collisions this transaction settled. */
+          mergedSpans:
+            Object.values(result.mergedByBlock).reduce((sum, n) => sum + n, 0) +
+            Object.values(crossMergedByBlock).reduce((sum, n) => sum + n, 0),
+        };
+      },
       /**
-       * The run's durable record (KTD16): one row per block this run attempted,
-       * replacing that block's previous row and leaving every other block's row
-       * standing — the same scoping as the observation delete above, so the
-       * record and the evidence it describes move together. A failed block was
-       * attempted too: its row is replaced with the failure, which is what makes
-       * "which blocks went unread" readable after a refresh instead of living in
-       * one component's state (R24).
+       * Sized against the function's sixty-second ceiling, not chosen freely.
        *
-       * The failure kinds fold to the record's two classes (R22): "terminal"
-       * fails identically on every press and is recorded as such; everything
-       * else — retryable, filing, unknown — is recorded retryable, because a
-       * filing miss genuinely is fixed by re-reading the block and inviting a
-       * retry is the honest default for a failure nothing classified. A block
-       * is only ever recorded read off succeededBlocks, which the adapters feed
-       * strictly from validated output (KTD5, R26).
+       * The arithmetic that matters is the whole request, not this phase: extraction
+       * is bounded by BLOCK_TIMEOUT_MS (40s, concurrent across blocks), `maxWait` is
+       * spent *before* the transaction starts, and `timeout` bounds it once it has —
+       * so the two add rather than overlap. At 5 + 12 the worst case was 57s, and the
+       * remaining 3 had to cover a cold start, the Prisma connect, the session
+       * lookup, and the response. On a slow minute that does not fit, and the way it
+       * fails is the worst one available: the function is killed rather than
+       * returning, so no error reaches describeDatabaseFailure and the PM is told
+       * only that something went wrong.
        *
-       * `mergedSpans` is the block's losing filings from the in-memory pass
-       * plus the cross-run collisions above, attributed to the in-run block
-       * (see the contest for why). `configVersion` stays null until
-       * per-rubric config exists (U10).
+       * 2 + 8 puts the worst case at 50s. The writes are a few batched statements,
+       * so eight seconds is a failure ceiling and not an expected duration — and a
+       * database too slow to start a transaction in two seconds is one this run
+       * should give up on quickly and say so, rather than spend the request's
+       * remaining budget waiting for.
        */
-      const attempted = [
-        ...result.succeededBlocks,
-        ...result.failedBlocks.map((f) => f.rubricKey),
-      ];
-      await tx.extractionBlockRun.deleteMany({
-        where: { callId, rubricKey: { in: attempted } },
-      });
-      await tx.extractionBlockRun.createMany({
-        data: [
-          ...result.succeededBlocks.map((rubricKey) => ({
-            callId,
-            rubricKey,
-            outcome: "READ" as const,
-            droppedQuotes: result.droppedByBlock[rubricKey]?.quotes ?? 0,
-            droppedClaims: result.droppedByBlock[rubricKey]?.claims ?? 0,
-            mergedSpans:
-              (result.mergedByBlock[rubricKey] ?? 0) + (crossMergedByBlock[rubricKey] ?? 0),
-          })),
-          ...result.failedBlocks.map((f) => ({
-            callId,
-            rubricKey: f.rubricKey,
-            outcome:
-              f.kind === "terminal"
-                ? ("FAILED_TERMINAL" as const)
-                : ("FAILED_RETRYABLE" as const),
-            reason: f.reason,
-          })),
-        ],
-      });
+      { timeout: 8_000, maxWait: 2_000 },
+    );
 
-      /**
-       * A call is only "extracted" when every block was read.
-       *
-       * Marking it extracted after a partial run made the missing blocks
-       * indistinguishable from blocks that genuinely had nothing in them: the
-       * failure list lived only in the button's local state, so one refresh and the
-       * transcript page showed a plain green chip over an incomplete read.
-       */
-      await tx.call.update({
-        where: { id: callId },
-        data: { extracted: result.failedBlocks.length === 0 },
-      });
-
-      return {
-        observationsWritten: persisted.length,
-        claimsWritten: claimRows.length,
-        /** Re-created quotes the PM had already ruled on, and so were skipped. */
-        skippedAlreadyRuledOn: result.observations.length - fresh.length,
-        /** In-run merges plus the cross-run collisions this transaction settled. */
-        mergedSpans:
-          Object.values(result.mergedByBlock).reduce((sum, n) => sum + n, 0) +
-          Object.values(crossMergedByBlock).reduce((sum, n) => sum + n, 0),
-      };
-    },
+    return { ...result, ...written };
+  } finally {
     /**
-     * Sized against the function's sixty-second ceiling, not chosen freely.
+     * Release on every path out of the try — the success return, the handled
+     * failure whose transaction still commits its run rows, and a thrown one
+     * (every block failing rethrows out of the fan-out). Without the failure
+     * leg, a run that failed cleanly in two seconds would hold the call for
+     * the rest of the expiry window, telling the PM who presses retry that an
+     * extraction is running when nothing is.
      *
-     * The arithmetic that matters is the whole request, not this phase: extraction
-     * is bounded by BLOCK_TIMEOUT_MS (40s, concurrent across blocks), `maxWait` is
-     * spent *before* the transaction starts, and `timeout` bounds it once it has —
-     * so the two add rather than overlap. At 5 + 12 the worst case was 57s, and the
-     * remaining 3 had to cover a cold start, the Prisma connect, the session
-     * lookup, and the response. On a slow minute that does not fit, and the way it
-     * fails is the worst one available: the function is killed rather than
-     * returning, so no error reaches describeDatabaseFailure and the PM is told
-     * only that something went wrong.
-     *
-     * 2 + 8 puts the worst case at 50s. The writes are a few batched statements,
-     * so eight seconds is a failure ceiling and not an expected duration — and a
-     * database too slow to start a transaction in two seconds is one this run
-     * should give up on quickly and say so, rather than spend the request's
-     * remaining budget waiting for.
+     * A separate update after the commit, not a statement inside it: the
+     * transaction's budget is sized against the function ceiling (see its
+     * options), and the release needs no atomicity with the writes — a claim
+     * left standing by a crash between commit and release is exactly what the
+     * expiry absorbs. Conditional on our own stamp so this run releases only
+     * the claim it took: if our claim went stale mid-run and a newer run
+     * seized the call, clearing the column unconditionally would hand the
+     * call to a third run while the second was still working it.
      */
-    { timeout: 8_000, maxWait: 2_000 },
-  );
-
-  return { ...result, ...written };
+    await db.call.updateMany({
+      where: { id: callId, extractionClaimedAt: claimStamp },
+      data: { extractionClaimedAt: null },
+    });
+  }
 }
 
 // ------------------------------------------------------------------- review

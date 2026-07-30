@@ -1085,6 +1085,151 @@ describe("extraction persistence", () => {
       expect(await db.extractionBlockRun.count({ where: { callId } })).toBe(0);
     });
   });
+
+  /**
+   * KTD17 / R16: two extractions cannot run against one call at once, and a
+   * killed run does not lock the call. The extracted check is a read followed
+   * by forty seconds of network work, and a read holds nothing across what
+   * follows — so the guard is a conditional update claiming the call, with an
+   * expiry sized to the function ceiling: the platform kills a run at sixty
+   * seconds with no error path, so a claim older than that cannot belong to a
+   * run that is still alive.
+   */
+  describe("the extraction lease", () => {
+    it("refuses a second run while a live claim holds the call, and writes nothing", async () => {
+      const { dealId, callId } = await seedCall("Lease Refusal Test");
+      // A live claim, exactly as the concurrent run's conditional update leaves it.
+      await db.call.update({
+        where: { id: callId },
+        data: { extractionClaimedAt: new Date() },
+      });
+
+      await expect(
+        runExtractionForCall(pm, callId, {
+          client: stubClient({ observations: [verbatim], claims: [] }),
+        }),
+      ).rejects.toThrow(/already running/);
+
+      // force bypasses the extracted check, not the lease — a re-run must not
+      // barge into a run that is mid-flight right now.
+      await expect(
+        runExtractionForCall(pm, callId, {
+          force: true,
+          client: stubClient({ observations: [verbatim], claims: [] }),
+        }),
+      ).rejects.toThrow(/already running/);
+
+      // Refused before the fan-out: no observations, no run rows.
+      expect(await db.observation.count({ where: { dealId } })).toBe(0);
+      expect(await db.extractionBlockRun.count({ where: { callId } })).toBe(0);
+      // And the refusal did not release the claim it never took.
+      const row = await db.call.findUniqueOrThrow({ where: { id: callId } });
+      expect(row.extractionClaimedAt).not.toBeNull();
+    });
+
+    it("treats a claim older than the function ceiling as abandoned and proceeds", async () => {
+      const { dealId, callId } = await seedCall("Lease Stale Test");
+      // The claim a killed run leaves behind: written, then never released,
+      // because the platform kill has no error path. Sixty-one seconds old,
+      // so past the ceiling — no run that wrote it can still be alive.
+      await db.call.update({
+        where: { id: callId },
+        data: { extractionClaimedAt: new Date(Date.now() - 61_000) },
+      });
+
+      await runExtractionForCall(pm, callId, {
+        client: stubClient({ observations: [verbatim], claims: [] }),
+      });
+
+      expect(await db.observation.count({ where: { dealId } })).toBe(1);
+      // The takeover run released the claim it seized.
+      const row = await db.call.findUniqueOrThrow({ where: { id: callId } });
+      expect(row.extractionClaimedAt).toBeNull();
+    });
+
+    it("a run that succeeds releases the claim", async () => {
+      const { callId } = await seedCall("Lease Success Release Test");
+      await runExtractionForCall(pm, callId, {
+        client: stubClient({ observations: [verbatim], claims: [] }),
+      });
+      const row = await db.call.findUniqueOrThrow({ where: { id: callId } });
+      expect(row.extractionClaimedAt).toBeNull();
+    });
+
+    /**
+     * The thrown-failure path: every block failing is a failed run and
+     * rethrows out of the fan-out. The claim must be released before the
+     * rethrow — otherwise a run that failed cleanly in two seconds holds the
+     * call for the rest of the expiry window, and the retry the failure
+     * message invites is refused as "already running" over nothing.
+     */
+    it("a run that fails releases the claim, so a follow-up proceeds without waiting", async () => {
+      const { callId } = await seedCall("Lease Failure Release Test");
+      const allFail: ExtractionClient = {
+        messages: {
+          parse: async () => {
+            throw Object.assign(new Error("nope"), { status: 429 });
+          },
+        },
+      };
+      await expect(runExtractionForCall(pm, callId, { client: allFail })).rejects.toThrow(
+        /rate limited/,
+      );
+
+      const row = await db.call.findUniqueOrThrow({ where: { id: callId } });
+      expect(row.extractionClaimedAt).toBeNull();
+
+      // The follow-up run does not have to wait out the expiry window.
+      await expect(
+        runExtractionForCall(pm, callId, {
+          client: stubClient({ observations: [], claims: [] }),
+        }),
+      ).resolves.toBeDefined();
+    });
+
+    /**
+     * R16: the two refusals answer different questions — work already done
+     * versus work happening right now — and the PM's next move differs (force
+     * versus wait). If they ever collapse into one sentence, the button cannot
+     * tell the PM which situation they are in.
+     */
+    it("refuses a running call in different words from an extracted one", async () => {
+      const { callId } = await seedCall("Lease Wording Test");
+      await runExtractionForCall(pm, callId, {
+        client: stubClient({ observations: [], claims: [] }),
+      });
+
+      // Extracted and unclaimed: the already-extracted refusal.
+      const extractedErr: Error = await runExtractionForCall(pm, callId, {
+        client: stubClient({ observations: [], claims: [] }),
+      }).then(
+        () => {
+          throw new Error("expected the already-extracted refusal");
+        },
+        (e: Error) => e,
+      );
+      expect(extractedErr).toBeInstanceOf(RuleViolation);
+      expect(extractedErr.message).toMatch(/already been extracted/);
+      expect(extractedErr.message).not.toMatch(/already running/);
+
+      // Claimed and not extracted: the lease refusal, in its own words.
+      await db.call.update({
+        where: { id: callId },
+        data: { extracted: false, extractionClaimedAt: new Date() },
+      });
+      const runningErr: Error = await runExtractionForCall(pm, callId, {
+        client: stubClient({ observations: [], claims: [] }),
+      }).then(
+        () => {
+          throw new Error("expected the lease refusal");
+        },
+        (e: Error) => e,
+      );
+      expect(runningErr).toBeInstanceOf(RuleViolation);
+      expect(runningErr.message).toMatch(/already running/);
+      expect(runningErr.message).not.toMatch(/already been extracted/);
+    });
+  });
 });
 
 describe("observation review", () => {
