@@ -4,8 +4,7 @@ import { db } from "@/lib/db";
 import { NotAuthorized, type Actor } from "@/lib/authz";
 import { RuleViolation } from "@/lib/domain/rules";
 import type { ExtractionClient } from "@/lib/extraction/extract";
-import { systemPromptFor } from "@/lib/extraction/prompt";
-import type { ExtractionOutput } from "@/lib/extraction/schema";
+import type { ExtractionOutput } from "@/lib/extraction/types";
 import { RUBRICS } from "@/framework";
 import {
   addCall,
@@ -66,15 +65,23 @@ async function newDeal(company: string): Promise<string> {
  * write six copies of every observation and quietly invalidate every count in this
  * file. Each call gets only the observations whose row actually belongs to the
  * block being asked — which is what the real per-block schema enforces.
+ *
+ * Routed on the rubric key the request now carries (KTD7), not on the prompt
+ * text — and a request for a block this stub cannot place throws rather than
+ * answering with a default, so a routing mistake fails as a routing error
+ * instead of as a dozen quietly wrong counts.
  */
 function stubClient(output: ExtractionOutput): ExtractionClient {
   return {
     messages: {
       parse: async (params) => {
-        const rubric = RUBRICS.find((r) => params.system === systemPromptFor(r));
-        const mine = rubric
-          ? output.observations.filter((o) => rubric.subs.some((s) => s.key === o.subDimensionKey))
-          : output.observations;
+        const rubric = RUBRICS.find((r) => r.key === params.rubricKey);
+        if (!rubric) {
+          throw new Error(`stub asked for an unrouted rubric key: ${String(params.rubricKey)}`);
+        }
+        const mine = output.observations.filter((o) =>
+          rubric.subs.some((s) => s.key === o.subDimensionKey),
+        );
         const quotes = new Set(mine.map((o) => o.quote));
         return {
           parsed_output: {
@@ -561,15 +568,15 @@ describe("extraction persistence", () => {
     expect(await db.observation.count({ where: { dealId } })).toBe(2);
 
     // Second run: the Product/Tech block fails, every other block answers.
-    const ptPrompt = systemPromptFor(RUBRICS.find((r) => r.key === "pt")!);
     const failing: ExtractionClient = {
       messages: {
         parse: async (params) => {
-          if (params.system === ptPrompt) throw Object.assign(new Error("nope"), { status: 429 });
-          const rubric = RUBRICS.find((r) => params.system === systemPromptFor(r));
-          const mine = rubric
-            ? [ftRow].filter((o) => rubric.subs.some((s) => s.key === o.subDimensionKey))
-            : [];
+          if (params.rubricKey === "pt") throw Object.assign(new Error("nope"), { status: 429 });
+          const rubric = RUBRICS.find((r) => r.key === params.rubricKey);
+          if (!rubric) {
+            throw new Error(`stub asked for an unrouted rubric key: ${String(params.rubricKey)}`);
+          }
+          const mine = [ftRow].filter((o) => rubric.subs.some((s) => s.key === o.subDimensionKey));
           return { parsed_output: { observations: mine, claims: [] }, stop_reason: "end_turn" };
         },
       },
@@ -590,8 +597,7 @@ describe("extraction persistence", () => {
     const failing: ExtractionClient = {
       messages: {
         parse: async (params) => {
-          const pt = systemPromptFor(RUBRICS.find((r) => r.key === "pt")!);
-          if (params.system === pt) throw Object.assign(new Error("nope"), { status: 429 });
+          if (params.rubricKey === "pt") throw Object.assign(new Error("nope"), { status: 429 });
           return { parsed_output: { observations: [], claims: [] }, stop_reason: "end_turn" };
         },
       },

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as z from "zod";
 import {
   BLOCK_TIMEOUT_MS,
   DEFAULT_EXTRACTION_MODEL,
@@ -220,6 +221,47 @@ describe("extractFromTranscript", () => {
   });
 
   /**
+   * KTD7. The request names the block it reads, so a stub routes on the key
+   * rather than reverse-engineering the block out of a generated prompt string
+   * — prompt-matching is exactly the coupling that made every prompt edit a
+   * test edit, with a silent-wrong fallback when the match failed.
+   */
+  it("carries the rubric key on each block's request", async () => {
+    const { client, calls } = stub(output());
+    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client });
+
+    expect(calls.map((c) => c.rubricKey).sort()).toEqual(RUBRICS.map((r) => r.key).sort());
+  });
+
+  /**
+   * The other half of KTD7: a routed stub that is asked for a block it does not
+   * know must throw, and the failure must read as a routing failure. The old
+   * stubs answered the unmatched case with a default payload, so a routing
+   * mistake surfaced as a dozen wrong counts instead of one named error.
+   */
+  it("a stub asked for an unexpected rubric key fails as a routing error, not a default answer", async () => {
+    const routedOnlyToFirst: ExtractionClient = {
+      messages: {
+        parse: async (params) => {
+          if (params.rubricKey !== RUBRICS[0].key) {
+            throw new Error(`stub asked for an unrouted rubric key: ${String(params.rubricKey)}`);
+          }
+          return { parsed_output: output(), stop_reason: "end_turn" };
+        },
+      },
+    };
+
+    const r = await extractFromTranscript(
+      { transcript: TRANSCRIPT, callNumber: 1 },
+      { client: routedOnlyToFirst, blocks: [RUBRICS[0], RUBRICS[1]] },
+    );
+    expect(r.succeededBlocks).toEqual([RUBRICS[0].key]);
+    expect(r.failedBlocks).toHaveLength(1);
+    expect(r.failedBlocks[0].rubricKey).toBe(RUBRICS[1].key);
+    expect(r.failedBlocks[0].reason).toMatch(/unrouted rubric key/);
+  });
+
+  /**
    * The fan-out is the fix for both symptoms the first version had — too few
    * observations and too slow. One call per macro-dimension, each reading the whole
    * transcript against six or seven rows.
@@ -231,7 +273,13 @@ describe("extractFromTranscript", () => {
         parse: async (params) => {
           calls.push(params);
           // Each block returns one observation, keyed to a row it actually owns.
-          const rubric = RUBRICS.find((r) => params.system === systemPromptFor(r))!;
+          // Routed on the rubric key the request carries (KTD7), and a request
+          // this stub does not recognise throws rather than answering with a
+          // default — a routing mistake must fail as one.
+          const rubric = RUBRICS.find((r) => r.key === params.rubricKey);
+          if (!rubric) {
+            throw new Error(`stub asked for an unrouted rubric key: ${String(params.rubricKey)}`);
+          }
           return {
             parsed_output: {
               observations: [
@@ -271,7 +319,7 @@ describe("extractFromTranscript", () => {
     const client: ExtractionClient = {
       messages: {
         parse: async (params) => {
-          if (params.system === systemPromptFor(failing)) {
+          if (params.rubricKey === failing.key) {
             throw Object.assign(new Error("boom"), { status: 429 });
           }
           return { parsed_output: output(), stop_reason: "end_turn" };
@@ -606,6 +654,13 @@ describe("API failures are reported, not thrown past the action layer", () => {
     ["a rate limit", { status: 429, error: {} }, /rate limited/],
     ["an outage", { status: 529, error: {} }, /unavailable/],
     ["a dropped connection", { message: "fetch failed" }, /could not reach the API/],
+    /**
+     * Detected by the shape a timed-out SDK call throws — read structurally, so
+     * a stub throwing a plain object with the right name behaves like the real
+     * class — and rendered from the "timeout" pseudo-status, never as a network
+     * fault: the model was answering and ran out of time.
+     */
+    ["a timeout", { name: "APIConnectionTimeoutError", message: "Request timed out." }, /did not finish this block/],
   ];
 
   it.each(cases)("reports %s as an ExtractionError", async (_label, thrown, expected) => {
@@ -617,23 +672,88 @@ describe("API failures are reported, not thrown past the action layer", () => {
     ).rejects.toThrow(expected);
   });
 
+  /**
+   * KTD9. The SDK validates the model's answer against the block schema inside
+   * the awaited call, so a violation throws with no HTTP status — and the
+   * catch-all used to read "no status" as "could not reach the API". A PM told
+   * the network failed would check the network; the actual problem is the
+   * model's filing, and the remedy is a re-run.
+   */
+  it("reports a schema violation as a filing failure, not a network one", async () => {
+    const zodViolation = z
+      .object({ observations: z.array(z.object({ quote: z.string() })) })
+      .safeParse({ observations: [{}] });
+    expect(zodViolation.success).toBe(false);
+    const thrown = (zodViolation as { error?: unknown }).error;
+
+    const r = extractFromTranscript(
+      { transcript: TRANSCRIPT, callNumber: 1 },
+      { client: failing(thrown), blocks: [ONE_BLOCK] },
+    );
+    await expect(r).rejects.toThrow(ExtractionError);
+
+    const message = await r.then(
+      () => "",
+      (e: Error) => e.message,
+    );
+    expect(message).not.toMatch(/reach the API/);
+    expect(message).not.toMatch(/network/i);
+    // It names the filing problem instead.
+    expect(message).toMatch(/did not (match|fit)/);
+  });
+
+  /**
+   * The two failures without an HTTP status become distinguishable from the
+   * thrown error's kind, not by parsing the sentence (KTD5). End-to-end through
+   * the fan-out, because the aggregate throw is what lib/actions.ts sees.
+   */
+  it("marks a rate limit retryable and a bad key terminal, without message-parsing", async () => {
+    const kindOf = async (thrown: unknown) =>
+      extractFromTranscript(
+        { transcript: TRANSCRIPT, callNumber: 1 },
+        { client: failing(thrown), blocks: [ONE_BLOCK] },
+      ).then(
+        () => "clean",
+        (e: ExtractionError) => e.kind,
+      );
+
+    expect(await kindOf({ status: 429, error: {} })).toBe("retryable");
+    expect(await kindOf({ status: 529, error: {} })).toBe("retryable");
+    expect(await kindOf({ status: 401, error: {} })).toBe("terminal");
+    expect(await kindOf({ status: 404, error: {} })).toBe("terminal");
+    const zodViolation = z.object({ q: z.string() }).safeParse({});
+    expect(await kindOf((zodViolation as { error?: unknown }).error)).toBe("filing");
+  });
+
+  /**
+   * The neutral signature (mirroring describeFirefliesFailure): a status that
+   * is a number, null, or a pseudo-status, so no provider's exception shape is
+   * needed to render a failure. One readable sentence per case.
+   */
+  it("renders a readable message for every status shape", () => {
+    expect(describeApiFailure(null)).toMatch(/could not reach the API/);
+    expect(describeApiFailure("timeout")).toMatch(/did not finish this block within \d+ seconds/);
+    expect(describeApiFailure(400)).toMatch(/rejected the request/);
+    expect(describeApiFailure(401)).toMatch(/ANTHROPIC_API_KEY is not valid/);
+    expect(describeApiFailure(429)).toMatch(/rate limited/);
+    expect(describeApiFailure(500)).toMatch(/unavailable/);
+    expect(describeApiFailure(529)).toMatch(/unavailable/);
+  });
+
   it("never puts the key in the message", () => {
     // The API's own text is passed through, so this asserts the shape it can take.
-    const message = describeApiFailure({
-      status: 401,
-      error: { error: { message: "invalid x-api-key" } },
-    });
+    const message = describeApiFailure(401, ["invalid x-api-key"]);
     expect(message).not.toMatch(/sk-ant/);
   });
 
   it("says the transcript survived on the retryable failures", () => {
     // A PM who just pasted 40 minutes of transcript needs to know it is not lost.
     for (const status of [429, 500, 529]) {
-      expect(describeApiFailure({ status, error: {} }), String(status)).toMatch(/saved/);
+      expect(describeApiFailure(status), String(status)).toMatch(/saved/);
     }
   });
 
   it("passes the request id through where the API gives one", () => {
-    expect(describeApiFailure({ status: 400, requestID: "req_abc", error: {} })).toContain("req_abc");
+    expect(describeApiFailure(400, [], "req_abc")).toContain("req_abc");
   });
 });

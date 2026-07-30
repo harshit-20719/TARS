@@ -22,14 +22,25 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { RUBRICS, type Rubric } from "@/framework";
+import { outputSchemaFor } from "./schema";
+/**
+ * The error and the draft shapes live in types.ts now, beside the provider
+ * port, so lib/actions.ts can recognise an extraction failure without this
+ * module — and its Anthropic import — entering the action's module graph.
+ * Re-exported here so existing importers keep working while the callers
+ * migrate; new code should import from lib/extraction/types.
+ */
 import {
-  ExtractionOutputSchema,
-  outputSchemaFor,
+  ExtractionError,
   type DraftClaim,
   type DraftObservation,
+  type ExtractionFailureKind,
   type ExtractionOutput,
-} from "./schema";
+} from "./types";
 import { buildExtractionUserMessage, systemPromptFor } from "./prompt";
+
+export { ExtractionError };
+export type { DraftClaim, DraftObservation, ExtractionOutput };
 
 /**
  * Default model, resolving spec D6 in favour of Sonnet 5.
@@ -121,15 +132,21 @@ export function thinkingConfigFor(model: string): Record<string, unknown> {
   };
 }
 
-export class ExtractionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ExtractionError";
-  }
-}
+/**
+ * The reduced form of a provider failure: what happened, said in no provider's
+ * vocabulary. HTTP statuses carry across providers; the two pseudo-statuses
+ * cover the failures that arrive without one. `"timeout"` is the model still
+ * answering when the clock ran out, and `"filing"` is the model's answer not
+ * fitting the block's schema (KTD9) — each deliberately its own case rather
+ * than folded into `null`, because `null` means the connection failed and a PM
+ * who hit either of the others did not have a network problem.
+ * `describeFirefliesFailure` (lib/fireflies/client.ts) draws the same
+ * distinction for the same reason.
+ */
+export type ApiFailureStatus = number | null | "timeout" | "filing";
 
 /**
- * Turn a failure from the Anthropic API into something a PM can act on.
+ * Turn a failure from the extraction API into something a PM can act on.
  *
  * This exists because of how lib/actions.ts handles errors: it converts the typed
  * domain failures into values and deliberately rethrows everything else, so an
@@ -140,21 +157,50 @@ export class ExtractionError extends Error {
  * empty credit balance, a rate limit) all surfaced as the one error that says
  * nothing at all.
  *
- * The API's own explanation is passed through. It names the parameter or the
- * billing state, which is the part worth reading, and it never contains the key.
+ * The API's own explanation is passed through in `messages`. It names the
+ * parameter or the billing state, which is the part worth reading, and it never
+ * contains the key. The function takes a status rather than the thrown error so
+ * it stays provider-neutral: classifying an SDK's exception into a status is
+ * the adapter's job (classifyApiFailure below, for the Anthropic SDK), and the
+ * wording here belongs to no SDK at all.
  */
-export function describeApiFailure(e: unknown): string {
-  const err = e as {
-    status?: number;
-    requestID?: string;
-    error?: { error?: { message?: string; type?: string } };
-    message?: string;
-  };
-  const detail = err?.error?.error?.message ?? "";
-  const said = detail ? ` The API said: ${detail}` : "";
-  const ref = err?.requestID ? ` (request ${err.requestID})` : "";
+export function describeApiFailure(
+  status: ApiFailureStatus,
+  messages: string[] = [],
+  requestID?: string,
+): string {
+  const said = messages.length ? ` The API said: ${messages.join("; ")}` : "";
+  const ref = requestID ? ` (request ${requestID})` : "";
 
-  switch (err?.status) {
+  /**
+   * A timeout is not "could not reach the API" and should not read as one. It
+   * means the model was answering and had not finished — a different problem
+   * with different levers, and the message names them rather than leaving the PM
+   * to guess at a network fault that is not happening.
+   */
+  if (status === "timeout") {
+    return (
+      `the model did not finish this block within ${Math.round(BLOCK_TIMEOUT_MS / 1000)} seconds, ` +
+      `so nothing was written for it. The other blocks are unaffected — re-run to try this one again. ` +
+      `If it keeps happening the transcript is long enough to need a faster model (EXTRACTION_MODEL).`
+    );
+  }
+
+  /**
+   * KTD9. The model answered and the answer did not fit the block's schema —
+   * a filing failure, nothing to do with reaching anything. This used to fall
+   * through to the no-status branch below and tell the PM the network was down,
+   * which sent them checking exactly the thing that had worked.
+   */
+  if (status === "filing") {
+    const where = messages.length ? ` The mismatch: ${messages.join("; ")}` : "";
+    return (
+      `the model's answer did not fit this block's filing schema, so its drafts were not ` +
+      `written. The transcript is saved — re-run to read this block again.${where}`
+    );
+  }
+
+  switch (status) {
     case 401:
       return `the ANTHROPIC_API_KEY is not valid, so no drafts were written.${said}`;
     case 403:
@@ -174,26 +220,80 @@ export function describeApiFailure(e: unknown): string {
     default:
       break;
   }
-  if (typeof err?.status === "number" && err.status >= 500) {
+  if (typeof status === "number" && status >= 500) {
     return `the API is unavailable right now — the transcript is saved, so try again.${ref}`;
   }
-  /**
-   * A timeout is not "could not reach the API" and should not read as one. It
-   * means the model was answering and had not finished — a different problem
-   * with different levers, and the message names them rather than leaving the PM
-   * to guess at a network fault that is not happening.
-   */
-  const name = (e as { name?: string })?.name ?? "";
-  if (name === "APIConnectionTimeoutError" || /timed out/i.test(err?.message ?? "")) {
-    return (
-      `the model did not finish this block within ${Math.round(BLOCK_TIMEOUT_MS / 1000)} seconds, ` +
-      `so nothing was written for it. The other blocks are unaffected — re-run to try this one again. ` +
-      `If it keeps happening the transcript is long enough to need a faster model (EXTRACTION_MODEL).`
-    );
-  }
   // No status: a connection failure, or something the SDK threw before sending.
-  const raw = err?.message ? ` ${err.message}` : "";
+  const raw = messages.length ? ` ${messages.join("; ")}` : "";
   return `could not reach the API, so no drafts were written.${raw}`;
+}
+
+/**
+ * Which class of failure a status belongs to (KTD5). The status is the one fact
+ * that survives translation to a readable message, so the kind is derived from
+ * it here rather than re-inferred later by parsing the message back.
+ */
+function failureKindFor(status: ApiFailureStatus): ExtractionFailureKind {
+  if (status === "filing") return "filing";
+  // A rate limit, an outage, a timeout, and a dropped connection all clear on
+  // their own; the message for each already says "try again".
+  if (status === "timeout" || status === null || status === 429) return "retryable";
+  if (status >= 500) return "retryable";
+  // Every remaining status is a request that will fail the same way next time.
+  return "terminal";
+}
+
+/**
+ * Read an Anthropic SDK exception into the neutral status vocabulary.
+ *
+ * This is the one place the SDK's error shape is understood, and it moves out
+ * with the request build in U2. Everything is read structurally — `name` as a
+ * string, never `instanceof` — so a plain-object stub shaped like the real
+ * thing behaves like the real thing, the same convention isTimeout follows in
+ * lib/fireflies/client.ts.
+ */
+function classifyApiFailure(e: unknown): {
+  status: ApiFailureStatus;
+  messages: string[];
+  requestID?: string;
+} {
+  /**
+   * A schema violation first, because it is the failure with no status at all:
+   * the SDK validates the model's answer inside the awaited call and throws the
+   * Zod error raw. Recognised by its `issues` array rather than by class for
+   * the same stub-friendliness as everything else here. Only the issue paths
+   * travel — the failing value is the model's reading of a founder call.
+   */
+  const issues = (e as { issues?: unknown })?.issues;
+  const name = (e as { name?: unknown })?.name;
+  if (name === "ZodError" || Array.isArray(issues)) {
+    const where = (Array.isArray(issues) ? issues : [])
+      .slice(0, 3)
+      .map((i) => {
+        const issue = i as { path?: (string | number)[]; message?: string };
+        return `${issue.path?.join(".") || "response"}: ${issue.message ?? "did not match"}`;
+      });
+    return { status: "filing", messages: where };
+  }
+
+  const err = e as {
+    status?: number;
+    requestID?: string;
+    error?: { error?: { message?: string } };
+    message?: string;
+  };
+  if (typeof err?.status === "number") {
+    const detail = err.error?.error?.message;
+    return {
+      status: err.status,
+      messages: detail ? [detail] : [],
+      requestID: err.requestID,
+    };
+  }
+  if (name === "APIConnectionTimeoutError" || /timed out/i.test(err?.message ?? "")) {
+    return { status: "timeout", messages: [] };
+  }
+  return { status: null, messages: err?.message ? [err.message] : [] };
 }
 
 /**
@@ -338,6 +438,7 @@ function resolveClient(injected?: ExtractionClient): ExtractionClient {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new ExtractionError(
       "ANTHROPIC_API_KEY is not set — extraction cannot run. See docs/runbooks/deploy-vercel.md.",
+      "terminal",
     );
   }
   // Constructed lazily so importing this module never requires a key.
@@ -374,7 +475,7 @@ export async function extractFromTranscript(
   deps: { client?: ExtractionClient; model?: string; blocks?: readonly Rubric[] } = {},
 ): Promise<ExtractionResult> {
   if (!input.transcript.trim()) {
-    throw new ExtractionError("cannot extract from an empty transcript");
+    throw new ExtractionError("cannot extract from an empty transcript", "terminal");
   }
 
   const client = resolveClient(deps.client);
@@ -389,6 +490,7 @@ export async function extractFromTranscript(
 
   const merged: ExtractionOutput = { observations: [], claims: [] };
   const failedBlocks: ExtractionResult["failedBlocks"] = [];
+  const failedKinds: ExtractionFailureKind[] = [];
   const succeededBlocks: string[] = [];
 
   settled.forEach((outcome, i) => {
@@ -406,15 +508,23 @@ export async function extractFromTranscript(
         ? outcome.reason.message
         : String((outcome.reason as Error)?.message ?? outcome.reason);
     failedBlocks.push({ rubricKey: rubric.key, label: rubric.label, reason });
+    failedKinds.push(
+      outcome.reason instanceof ExtractionError ? outcome.reason.kind : "unknown",
+    );
   });
 
   // Every block failing is not a partial result, it is a failed run. Usually one
   // cause (a bad key, no credit); when the causes differ, say all of them rather
-  // than picking whichever settled first.
+  // than picking whichever settled first. The kind survives the aggregation for
+  // the same reason the messages do: a caller deciding whether a retry is worth
+  // offering must not have to parse the sentence to find out — but only when the
+  // blocks agree, because a mixed run has no one honest class.
   if (succeededBlocks.length === 0) {
     const reasons = [...new Set(failedBlocks.map((f) => f.reason))];
+    const kinds = new Set(failedKinds);
     throw new ExtractionError(
       reasons.length === 1 ? reasons[0] : `every block failed: ${reasons.join("; ")}`,
+      kinds.size === 1 ? failedKinds[0] : "unknown",
     );
   }
 
@@ -435,6 +545,15 @@ async function extractBlock(
   // Built outside the try so a schema problem here stays a programmer error
   // rather than being reported as an API failure.
   const params = {
+    /**
+     * Not an Anthropic field, and carried on purpose (KTD7): the request names
+     * the block it reads, so a test stub routes its answers on the key rather
+     * than reverse-engineering the block from a generated prompt string — and
+     * an unrouted request can throw instead of answering with a default. U2
+     * moves this bag into a neutral request type; the key is here first so the
+     * stubs can move off prompt-matching now.
+     */
+    rubricKey: rubric.key,
     model,
     /**
      * Sized for one block rather than for the whole rubric. Seven rows with
@@ -462,8 +581,13 @@ async function extractBlock(
   } catch (e) {
     // The one statement in this block is the API call, so everything from it is
     // an extraction failure — reported as a value the form can render instead of
-    // escaping as an unhandled error.
-    throw new ExtractionError(`${rubric.label}: ${describeApiFailure(e)}`);
+    // escaping as an unhandled error. Classified first, so the message and the
+    // machine-readable kind are derived from the same status and cannot disagree.
+    const { status, messages, requestID } = classifyApiFailure(e);
+    throw new ExtractionError(
+      `${rubric.label}: ${describeApiFailure(status, messages, requestID)}`,
+      failureKindFor(status),
+    );
   }
 
   // Check the refusal before reading content: on a refusal the content is empty
@@ -471,14 +595,21 @@ async function extractBlock(
   // reporting success.
   if (response.stop_reason === "refusal") {
     const category = response.stop_details?.category ?? "unspecified";
+    // Terminal: the model is declining this transcript, not having a bad minute.
     throw new ExtractionError(
       `${rubric.label}: the model declined to process this transcript (${category})`,
+      "terminal",
     );
   }
 
   const parsed = response.parsed_output;
   if (!parsed) {
-    throw new ExtractionError(`${rubric.label}: the model returned no parseable output`);
+    // Retryable: a generation that produced nothing usable is a fluke of this
+    // run, and re-running the block is the remedy the message implies.
+    throw new ExtractionError(
+      `${rubric.label}: the model returned no parseable output`,
+      "retryable",
+    );
   }
 
   // The block schema omits rubricKey — it is implied by which call this was, so

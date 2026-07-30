@@ -22,12 +22,13 @@ import { NotAuthenticated, NotAuthorized } from "@/lib/authz";
 import { requireAuthor, requireRole } from "@/lib/session";
 import { RuleViolation } from "@/lib/domain/rules";
 import { CodecError } from "@/lib/domain/codec";
-import { ExtractionError } from "@/lib/extraction/extract";
 /**
- * From lib/fireflies/types rather than lib/fireflies/client, so recognising a
- * Fireflies failure here does not pull the fetch client — and its credential
- * read — into every module that imports an action.
+ * Both error types come from their module's types file, not its client:
+ * recognising a failure here must not pull the network client — the Anthropic
+ * SDK on one side, the fetch wrapper and its credential read on the other —
+ * into every module that imports an action.
  */
+import { ExtractionError } from "@/lib/extraction/types";
 import { FirefliesError, type MeetingPage } from "@/lib/fireflies/types";
 import * as capture from "@/lib/services/capture";
 import * as importing from "@/lib/services/import";
