@@ -7,6 +7,7 @@ artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 product_contract_source: ce-plan-bootstrap
 execution: code
+deepened: 2026-07-30
 ---
 
 # Extraction Overhaul - Plan
@@ -96,6 +97,8 @@ Nothing in the record says which prompt produced a filing. `SubDimensionScore.ru
 - **An audit trail on configuration edits.** A version number is stamped (R25); who changed what, when, is not kept beyond the current row's `updatedAt` and `updatedById`.
 - **A before-and-after evaluation harness.** Quality is instrumented by the verbatim guard's drop count, the dedupe count, and the confidence mix — not by a scored comparison against a labelled transcript.
 - **Escalating the model tier automatically.** Escalation is a deploy-time change to one environment variable, informed by the drop counts this plan starts recording.
+- **Re-save awareness when a row's candidate evidence changes.** A saved score cites a frozen evidence set while the row's candidate list keeps moving — pre-existing behaviour that auto-filing makes routine rather than rare. Surfacing "saved against fewer quotes than the row now holds" is scoring-side work this plan does not touch.
+- **An undo on a decided observation.** Reject is one-way and deletes the row's citations everywhere; with the queue gone it is the only irreversible mistake left on the capture page.
 
 ---
 
@@ -204,6 +207,27 @@ The third row is the one this plan adds, and the reason it matters is the last c
 - Gemini's `anyOf: [{type: string}, {type: null}]` is the working nullable form. Verified present in the discovery document, not confirmed against a live call. If it is rejected, the fallback is an empty string with the field required — `speaker` and `timestamp` are already nullable-not-optional for exactly this class of reason.
 - Per-run cost and rate-limit figures come from third-party summaries; the vendor's pricing and limit pages are unreachable from this environment. Field names, enums, and SDK behaviour are verified against the live discovery document and the package source. The cost claim should be checked against one real invoice before the runbook's table is trusted.
 - Tokens per minute is the binding limit rather than requests per minute, at roughly 78k input tokens per run. Billing must be enabled on the project; the free tier allows about three concurrent runs.
+
+### System-Wide Impact
+
+- **A second admin authority crosses the auth boundary.** The middleware admits any signed-in session to any `/admin` path, and the author guard refuses nobody because every role authors. The extraction surface therefore repeats the people page's three-guard shape — page, action, service — with its own predicate in `lib/authz.ts`, and the nav entry stays gated on a server-computed boolean. This is the first proof the people-page pattern generalizes.
+- **The error-rendering invariant now spans two providers.** `lib/actions.ts` renders only recognised error types as text and rethrows everything else message-less — the bug fixed twice this week. The taxonomy in `lib/extraction/types.ts` becomes the contract both adapters must throw through; a raw SDK error from either provider reproduces the regression, which is why the Definition of Done pins that no server action's module graph reaches a provider SDK.
+- **The record contract widens once, and every consumer is re-read.** `mock/types.ts` gains the per-block outcomes and the observation's configuration version, `lib/repo/` maps them, and `lib/data.ts` stays the only read path. Downstream: `lib/steps.ts` redefines the outstanding count, review becomes a reading, and the evidence list re-gates its chip. The deals index is untouched — its badge reads observation presence, not status.
+- **Everything new fits inside the same sixty seconds.** The configuration snapshot is one query before the fan-out, dedupe runs in memory, and the run record is one insert of six rows inside the existing eight-second transaction. Persona and guidance lengthen all six prompts, so both are length-capped at validation (U10) against the measured per-block prompt sizes of 2,089–2,770 tokens. The block bound and the retry setting do not move.
+- **Provenance becomes two stamps.** The configuration version joins the score's rubric version as the second answer to "what produced this row." Comparability across calls is recorded, not enforced: the coverage grid still renders version-spanning columns side by side while the fourth coverage state stays deferred, and the stamp is what makes that legible later.
+
+### Risks & Dependencies
+
+| Risk | If it lands | Held by | Early signal |
+|---|---|---|---|
+| Recitation refusals on a verbatim workload — quoting long documents verbatim is exactly what triggers them, and no safety setting disables it | A transcript is partially unextractable on the default provider | Quote-length caps in prompt and schema (U3); terminal classification so the UI stops inviting re-runs (KTD6); one-variable fallback to Anthropic (KTD1) | Terminal blocks on the run record; the drop-count threshold in the Verification Contract |
+| A blocked response read as an empty success | The re-run delete wipes a block's evidence and writes nothing back | The outcome contract inspects block and finish reasons before output (KTD5); the Definition of Done requires the blocked-response test to fail without the guard (U3) | That test; in production, a read block with zero rows on a transcript that plainly speaks to it |
+| Pricing and rate-limit figures are third-party | The cost case for the port is wrong, or the concurrency assumptions fail | Recorded in Assumptions; the runbook's cost table ships marked unverified (U13); one real invoice is checked before it is trusted | The first invoice |
+| Token-per-minute contention across simultaneous runs — six blocks share one bucket, so a limit lands on a random subset | Colliding runs trade retryable failures, and each press bills the full input again | Retryable classification with readable copy (KTD6); billing enablement recorded as an operator step (U13); residual accepted at pilot scale | Retryable failures clustering in the same minute across run records |
+| SDK and schema-dialect churn | An upgrade moves the structured-output dialect and requests start failing | The exact version pin (KTD2's reasoning applied to the package); adapter isolation (KTD4); request-shape tests (U3) | U3's request-shape tests on any upgrade |
+| The migration lands on live rows | A deploy fails mid-migration, or a rollback runs old code against the new schema | Additive-only shape — nothing dropped or rewritten, so a prior build runs unchanged against the migrated database | The migration gate in the Verification Contract, run against a database holding existing rows |
+| The nullable schema form is unconfirmed on the wire | The first Gemini request is rejected on schema | The fallback in Assumptions (empty string plus required); a rejection reports as a filing failure with readable text, never a silent wipe | The first deployed run |
+| Preview deployments share the production database | A preview carrying credentials writes production rows | The new credential names documented Production-only in the runbook's environment table (U13), as the existing keys are | `/api/health` on a preview reporting extraction enabled |
 
 ### Sequencing
 
@@ -543,7 +567,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 
 **Approach:**
 
-1. Move the entry from the numbered flow to the cross-cutting readings, alongside the floor and the ledger. Those are readings of the record from a different angle rather than steps, which is exactly what this page becomes.
+1. Move the entry from the numbered flow to the cross-cutting readings, alongside the floor and the ledger. Those are readings of the record from a different angle rather than steps, which is exactly what this page becomes. The reading's state string carries the unconfirmed low-confidence count, the way coverage's carries its unevidenced count — five of six capture blocks render collapsed, so this is the one place the number stays visible without expanding them.
 2. Add an icon for the segment. The icon map replaced a two-way branch specifically so a third view could not silently borrow another's, and a test asserts every reading has a real one.
 3. Renumber. The sidebar derives its number from array position while four pages hardcode theirs in their eyebrow text, so a partial change ships a flow that contradicts itself. All four move in this unit.
 4. Rebuild the page around the run record. Its current summary cells are the axes of a queue it no longer is; the useful ones are which blocks were read, which failed and whether retrying can help, the dropped-quote and merged-span counts, and the confidence mix. Keep it read-only: no verb on this page.
@@ -558,6 +582,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 - A terminal block failure is presented as such, without inviting a re-run.
 - The page renders the dropped-quote and merged-span counts per block.
 - The page renders the unconfirmed low-confidence count.
+- The sidebar entry's state string shows the unconfirmed low-confidence count, and reads clear when there are none.
 - With every block read and nothing dropped, the page says so without claiming everything was confident.
 - The page offers no mutation.
 - The transcript card shows an unread-block count after a partial run, and none after a full one.
@@ -588,7 +613,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 3. Stamp the configuration version on the observation as a nullable column, mirroring the score's rubric version and for the same stated reason.
 4. Read through absent rows. The repository synthesizes the empty shape — the same choice already made for an absent founder-type read — because the production build runs migrations and never the seed.
 5. Bump the version on every save, so a stamped observation is traceable to the text that produced it.
-6. Declare the input schema in the service, named for the verb and noun, with messages written as the sentence a person reads. Assert authority, then parse.
+6. Declare the input schema in the service, named for the verb and noun, with messages written as the sentence a person reads. Assert authority, then parse. Persona and guidance are trimmed and length-capped here too — sized at implementation against the measured per-block prompt budget — so six concurrent prompts cannot grow the model phase past the block bound.
 
 **Test scenarios:**
 - Reading configuration with no rows returns six default entries, one per rubric.
@@ -597,6 +622,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 - A temperature above the cap inserted directly is refused by the database constraint.
 - A negative temperature is refused.
 - Persona and guidance accept empty and are trimmed.
+- Persona or guidance longer than the cap is refused with a message naming the limit.
 - The observation's version column is nullable and existing rows are unaffected.
 - The seam function returns all six rubrics in framework order, defaults included.
 
@@ -701,13 +727,12 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 
 **Approach:**
 
-1. Amend spec D6. It proposes a Claude model through the Anthropic SDK. Record Gemini as the provider, citing the two reasons: roughly a twentieth of the per-run cost, and Biome holds Gemini credits. Keep the original decision visible as superseded rather than deleting it — it is a settled user-directed decision and the reason it changed is the useful part.
-2. Amend KTD3 and KTD4 in the L1 plan the same way. KTD3 describes structured outputs through the Anthropic parse helper; note that the enum it claims to enforce was a prose hint on the wire, and that the port makes it real. KTD4 names the model default; re-point it and keep the tier reasoning, which still holds.
-3. Amend the backend plan's D6 row and its dependency list.
-4. Update the README's summary line and its description of the extraction module, both of which name Claude.
-5. Update the runbook: the cost table's three Anthropic rows and the per-transcript figures, the environment table's two extraction rows, the troubleshooting row that names one credential, and the rotation note. Mark the cost figures as unverified against a real invoice, per the assumption recorded above.
-6. Update `.env.example`'s extraction block: the new credential names, the model default and its escalation path, and the fact that the thinking and effort knobs are Anthropic-only.
-7. Update `CONCEPTS.md`. Mapping confidence currently says an unsure mapping goes to a person, which stops being true — it files itself and waits to be confirmed. Add the confirm verb to the vocabulary.
+1. The three decision records — spec D6, the L1 plan's KTD3 and KTD4, and the backend plan's D6 row — already carry the amendment: Gemini by default, for cost and Biome's credits, with the superseded text kept visible. Verify they still describe what shipped, and re-point anything the build changed underneath them.
+2. Amend the spec's flow description where it names review as a numbered step of the deal flow.
+3. Update the README's summary line and its description of the extraction module, both of which name Claude.
+4. Update the runbook: the cost table's three Anthropic rows and the per-transcript figures, the environment table's two extraction rows, the troubleshooting row that names one credential, and the rotation note. Mark the cost figures as unverified against a real invoice, per the assumption recorded above.
+5. Update `.env.example`'s extraction block: the new credential names, the model default and its escalation path, and the fact that the thinking and effort knobs are Anthropic-only.
+6. Update `CONCEPTS.md`. Mapping confidence currently says an unsure mapping goes to a person, which stops being true — it files itself and waits to be confirmed. Add the confirm verb to the vocabulary.
 
 **Test expectation:** none — documentation only. The claims each amendment makes are verified by the units above.
 
