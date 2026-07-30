@@ -169,6 +169,10 @@ function toObservation(row: Prisma.ObservationGetPayload<{}>): Observation {
     status: row.status,
     ...(row.confidence ? { confidence: row.confidence } : {}),
     ...(row.mappingNote ? { mappingNote: row.mappingNote } : {}),
+    // Spread conditionally like the attribution above: absence means "only the
+    // machine has touched this row", which is what the unsure chip and the
+    // outstanding count read (KTD18).
+    ...(row.decidedById ? { decidedById: row.decidedById } : {}),
     layer: row.layer,
   };
 }

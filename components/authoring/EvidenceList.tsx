@@ -8,7 +8,7 @@ import { useAction } from "@/lib/useAction";
 import { ControlError } from "../ControlError";
 
 /**
- * The evidence cited by one score, with the two corrections worth making in place.
+ * The evidence cited by one score, with the rulings worth making in place.
  *
  * This replaced a checkbox per quote. Ticking boxes was asking the PM to restate a
  * mapping the machine had already made, forty-one rows over, at one round trip per
@@ -21,9 +21,16 @@ import { ControlError } from "../ControlError";
  *  - **Reject** — this quote is not evidence. It leaves every score that cites it,
  *    not just this one, which is the honest meaning of rejecting it.
  *  - **Move** — this quote is evidence, but for a different row. The commonest thing
- *    wrong with a draft is the row, not the quote, and re-filing beats rejecting a
+ *    wrong with a filing is the row, not the quote, and re-filing beats rejecting a
  *    good quote. Fixing it here rather than on a separate page is the point: the PM
  *    is already reading it, and they only notice the mis-filing while scoring.
+ *  - **Row is right** — the machine filed this unsure, and the person says the
+ *    filing is correct (KTD18). It renders only where the "unsure of this row"
+ *    chip does — low confidence, nobody has ruled — and both read the same
+ *    predicate, so they disappear together once the decider is set. The
+ *    confidence itself stays on the record; what a confirmation buys is that
+ *    the row stops asking for attention and survives a re-extraction, which
+ *    until this verb existed only a move could do.
  *
  * The quote itself is not editable. It was checked against the transcript before it
  * was written; letting it be typed over would quietly turn a citation into a
@@ -79,22 +86,41 @@ export function EvidenceList({
               against the anchors.
             */}
             {o.mappingNote && <span className="ev-why">{o.mappingNote}</span>}
-            {o.confidence === "low" && (
+            {/*
+              Gated on "nobody has ruled", not on the confidence alone (KTD18):
+              the confidence stays on a confirmed row — the record keeps saying
+              the machine was unsure — while the chip's job is to ask for
+              attention, which a decided row no longer needs. The old second
+              chip (the draft status) is gone with the queue it flagged: draft
+              is a legacy status nothing writes any more.
+            */}
+            {o.confidence === "low" && !o.decidedById && (
               <span className="chip warn xs">
                 <span className="dot" />
                 unsure of this row
-              </span>
-            )}
-            {o.status === "draft" && (
-              <span className="chip pending xs">
-                <span className="dot" />
-                needs a look
               </span>
             )}
             {o.status === "edited" && (
               <span className="chip xs line">moved here by you</span>
             )}
             <span className="ev-actions">
+              {/*
+                The confirm verb, in ReviewBoard's words for the same act. It is
+                the accepted decision with nothing else on it: sets the decider,
+                changes nothing — so on success the server re-renders the row
+                with `decidedById` set and this button leaves with the chip,
+                both being the same predicate.
+              */}
+              {o.confidence === "low" && !o.decidedById && (
+                <button
+                  type="button"
+                  className="btn xs ok"
+                  disabled={decide.pending}
+                  onClick={() => decide.run(dealId, o.id, { status: "accepted" })}
+                >
+                  Row is right
+                </button>
+              )}
               <button
                 type="button"
                 className="btn xs ghost"

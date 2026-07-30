@@ -356,12 +356,14 @@ describe("extraction persistence", () => {
   });
 
   /**
-   * The change that took review off the PM's critical path: a confident mapping is
-   * evidence on arrival, an unsure one waits for a person. If this inverts, either
-   * the PM is back to approving clerical work or the machine is filing things
-   * nobody checked.
+   * KTD19 / R11: every filing is evidence on arrival — nothing waits in a queue.
+   * A confident mapping and an unsure one are both written `accepted`; what
+   * distinguishes them is the confidence value, which the unsure one keeps as a
+   * mark on the row it sits on. If this inverts, either the PM is back to
+   * approving clerical work or the sidebar carries a standing alarm for a step
+   * that has left the flow.
    */
-  it("files a confident mapping as evidence and leaves an unsure one as a draft", async () => {
+  it("files a confident and an unsure mapping as evidence alike, the unsure one marked in place", async () => {
     const a = await seedCall("Confident Test");
     await runExtractionForCall(pm, a.callId, {
       client: stubClient({ observations: [verbatim], claims: [] }),
@@ -376,9 +378,39 @@ describe("extraction persistence", () => {
     await runExtractionForCall(pm, b.callId, {
       client: stubClient({ observations: [unsure], claims: [] }),
     });
-    const queued = await db.observation.findFirstOrThrow({ where: { dealId: b.dealId } });
-    expect(queued.status).toBe("draft");
-    expect(queued.confidence).toBe("low");
+    const marked = await db.observation.findFirstOrThrow({ where: { dealId: b.dealId } });
+    expect(marked.status).toBe("accepted");
+    expect(marked.confidence).toBe("low");
+    expect(marked.decidedById).toBeNull();
+  });
+
+  /** R11's blunt form: a fresh run writes the draft status onto nothing at all. */
+  it("writes no observation as a draft, whatever the confidence", async () => {
+    const { dealId, callId } = await seedCall("No Draft Test");
+    await runExtractionForCall(pm, callId, {
+      client: stubClient({ observations: [verbatim, unsure], claims: [] }),
+    });
+    expect(await db.observation.count({ where: { dealId } })).toBe(2);
+    expect(await db.observation.count({ where: { dealId, status: "draft" } })).toBe(0);
+  });
+
+  /**
+   * The mark is on the row, not on the citability: a low-confidence filing is a
+   * candidate like any other, so a score saved without an explicit list cites it.
+   */
+  it("cites a low-confidence filing as evidence when the row is scored", async () => {
+    const { dealId, callId } = await seedCall("Low Cited Test");
+    await runExtractionForCall(pm, callId, {
+      client: stubClient({ observations: [unsure], claims: [] }),
+    });
+
+    await setScore(pm, { dealId, subDimensionKey: "compounding-moat", value: 3 });
+
+    const score = await db.subDimensionScore.findFirstOrThrow({
+      where: { dealId, subDimensionKey: "compounding-moat" },
+      include: { evidence: true },
+    });
+    expect(score.evidence).toHaveLength(1);
   });
 
   /**
@@ -1233,6 +1265,137 @@ describe("extraction persistence", () => {
 });
 
 describe("observation review", () => {
+  /**
+   * KTD18: the confirm verb. "This row is right" is the accepted decision with
+   * nothing else on it — it sets the decider and changes nothing: not the
+   * status, not the row, not the confidence, not the note, and no score's
+   * citation set. The record keeps saying the machine was unsure while the row
+   * stops asking for attention.
+   */
+  describe("confirming a low-confidence filing", () => {
+    const unsureHere = {
+      rubricKey: "pt",
+      subDimensionKey: "compounding-moat",
+      quote: "Our matcher runs continuously instead of as a nightly batch job.",
+      speaker: "Rhea",
+      timestamp: "00:06",
+      confidence: "low" as const,
+      mappingNote: "cadence could be moat or product state",
+    };
+
+    async function seedUnsure(company: string) {
+      const dealId = await createDeal(pm, {
+        company,
+        oneLiner: "Continuous settlement reconciliation.",
+        founders: "Rhea Menon",
+      });
+      createdDealIds.push(dealId);
+      const callId = await addCall(pm, {
+        dealId,
+        number: 1,
+        label: "First founder call",
+        transcript: TRANSCRIPT,
+      });
+      await runExtractionForCall(pm, callId, {
+        client: stubClient({ observations: [unsureHere], claims: [] }),
+      });
+      return { dealId, callId };
+    }
+
+    it("sets the decider and changes nothing else — not even the citation set", async () => {
+      const { dealId } = await seedUnsure("Confirm Test");
+      // Score first, so the frozen citation set exists for the confirm to not touch.
+      await setScore(pm, { dealId, subDimensionKey: "compounding-moat", value: 3 });
+      const before = await db.observation.findFirstOrThrow({ where: { dealId } });
+      expect(before.decidedById).toBeNull();
+
+      await decideObservation(pm, before.id, { status: "accepted" });
+
+      const after = await db.observation.findUniqueOrThrow({ where: { id: before.id } });
+      expect(after.decidedById).toBe(pm.id);
+      expect(after.decidedAt).toBeInstanceOf(Date);
+      // Everything else stands, the confidence expressly included: the record
+      // keeps saying the machine was unsure.
+      expect(after.status).toBe("accepted");
+      expect(after.subDimensionKey).toBe(before.subDimensionKey);
+      expect(after.rubricKey).toBe(before.rubricKey);
+      expect(after.confidence).toBe("low");
+      expect(after.mappingNote).toBe(before.mappingNote);
+      expect(after.quote).toBe(before.quote);
+      // The score still cites it — confirming is not a citation change.
+      expect(await db.scoreEvidence.count({ where: { observationId: before.id } })).toBe(1);
+    });
+
+    /**
+     * The point of the verb (KTD18): a decided row falls outside the re-extract
+     * blast radius, so the confirmation survives the machine running again —
+     * where an unconfirmed low-confidence filing is the machine's to replace.
+     */
+    it("a confirmed row survives a forced re-run; an unconfirmed one is replaced", async () => {
+      const { dealId, callId } = await seedUnsure("Confirm Survives Test");
+      // A second unsure filing on another block, left unconfirmed.
+      const unconfirmed = {
+        rubricKey: "ft",
+        subDimensionKey: "earned-insight",
+        quote: "We ran settlement operations at two clearing banks for six years.",
+        speaker: "Rhea",
+        timestamp: "00:02",
+        confidence: "low" as const,
+        mappingNote: "operational background",
+      };
+      await runExtractionForCall(pm, callId, {
+        force: true,
+        client: stubClient({ observations: [unsureHere, unconfirmed], claims: [] }),
+      });
+      const confirmed = await db.observation.findFirstOrThrow({
+        where: { dealId, rubricKey: "pt" },
+      });
+      await decideObservation(pm, confirmed.id, { status: "accepted" });
+
+      // The machine reads the call again and returns the same two filings.
+      const summary = await runExtractionForCall(pm, callId, {
+        force: true,
+        client: stubClient({ observations: [unsureHere, unconfirmed], claims: [] }),
+      });
+
+      // The confirmed row is the same physical row — never deleted, never
+      // re-drafted (its quote was skipped as already ruled on).
+      const survivor = await db.observation.findUniqueOrThrow({ where: { id: confirmed.id } });
+      expect(survivor.decidedById).toBe(pm.id);
+      expect(survivor.confidence).toBe("low");
+      expect(summary.skippedAlreadyRuledOn).toBe(1);
+
+      // The unconfirmed filing was replaced: same quote, new row, still undecided.
+      const replaced = await db.observation.findMany({ where: { dealId, rubricKey: "ft" } });
+      expect(replaced).toHaveLength(1);
+      expect(replaced[0].decidedById).toBeNull();
+      expect(await db.observation.count({ where: { dealId } })).toBe(2);
+    });
+
+    /** The other two verbs still reach a low-confidence filing (R15's edge). */
+    it("move and reject still work on a low-confidence filing", async () => {
+      const { dealId } = await seedUnsure("Low Verbs Test");
+      await setScore(pm, { dealId, subDimensionKey: "compounding-moat", value: 3 });
+      const row = await db.observation.findFirstOrThrow({ where: { dealId } });
+
+      await decideObservation(pm, row.id, {
+        status: "edited",
+        subDimensionKey: "earned-insight",
+        rubricKey: "ft",
+      });
+      const moved = await db.observation.findUniqueOrThrow({ where: { id: row.id } });
+      expect(moved.subDimensionKey).toBe("earned-insight");
+      // A move retires the machine's metadata; a confirm keeps it — see above.
+      expect(moved.confidence).toBeNull();
+      expect(await db.scoreEvidence.count({ where: { observationId: row.id } })).toBe(0);
+
+      await decideObservation(pm, row.id, { status: "rejected" });
+      expect(
+        (await db.observation.findUniqueOrThrow({ where: { id: row.id } })).status,
+      ).toBe("rejected");
+    });
+  });
+
   it("records who decided and when, and can re-map the sub-dimension", async () => {
     const dealId = await newDeal("Review Test");
     const obs = await db.observation.create({

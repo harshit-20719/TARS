@@ -140,6 +140,16 @@ export interface Observation {
   confidence?: "high" | "low";
   /** One clause on why this row, read while scoring. */
   mappingNote?: string;
+  /**
+   * Who ruled on the filing — confirmed, moved, or rejected it. Absent while
+   * only the machine has touched the row, and *presence* is what the UI reads
+   * (KTD18): the unsure chip and the outstanding count both clear when a person
+   * has decided, whatever they decided, while the confidence stays on the
+   * record saying the machine was unsure. Carried as the stored id rather than
+   * a display string because nothing renders who — resolving a name would cost
+   * the hottest read a join for a value no page shows.
+   */
+  decidedById?: string;
   layer: Layer;
 }
 

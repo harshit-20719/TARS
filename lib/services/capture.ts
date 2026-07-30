@@ -505,21 +505,25 @@ export async function runExtractionForCall(
      * address exactly them.
      *
      * This used to be `status: "draft"` for both, which worked only because every
-     * machine-written row was a draft. They are not any more — a confidently mapped
-     * observation is written already accepted (see below) — so the marker has to be
-     * something else. `confidence: { not: null }` is that marker: it is set on
+     * machine-written row was a draft. None of them are any more — every machine
+     * filing is written already accepted (see below, KTD19) — so the marker has to
+     * be something else. `confidence: { not: null }` is that marker: it is set on
      * everything the machine files and on nothing a human does, including a re-map,
-     * which clears it.
+     * which clears it. And `decidedById: null` is what keeps a human ruling out of
+     * the blast radius — a confirmed filing carries a decider and survives the
+     * machine running again (KTD18), which is the point of the confirm verb.
      */
     const machineWritten: Prisma.ObservationWhereInput = {
       dealId: call.dealId,
       callNumber: call.number,
       decidedById: null,
       /**
-       * Either marker identifies an undecided machine row. `confidence` is set on
-       * everything this version writes, but rows written before that column existed
-       * have it null — and matching only on `confidence` left them behind on a
-       * re-run, so the next extraction duplicated them instead of replacing them.
+       * Either marker identifies an undecided machine row. The `status: "draft"`
+       * leg is legacy-only now — nothing writes a draft any more — but it stays:
+       * rows written before the confidence column existed carry null confidence
+       * and the old draft status, and matching only on `confidence` left them
+       * behind on a re-run, so the next extraction duplicated them instead of
+       * replacing them. A test pins exactly this.
        */
       OR: [{ confidence: { not: null } }, { status: "draft" }],
     };
@@ -655,19 +659,25 @@ export async function runExtractionForCall(
             speaker: o.speaker,
             timestamp: o.timestamp,
             /**
-             * A confident mapping files itself.
+             * Every filing is evidence on arrival (KTD19, R11).
              *
              * The framework reserves *scoring* for the PM (spec R5). It does not ask
              * them to hand-approve each quote, and treating it as though it did turned
              * seven screening calls a week into clerical work: a PM confirming that a
              * quote about a paying customer belongs under the customer row is not
-             * exercising judgment, they are doing data entry. So a high-confidence
-             * mapping lands as evidence directly, and an unsure one waits as a draft
-             * in the exception queue. The PM's attention goes on the score, which is
-             * the part only they can do — and re-mapping stays available in place, so
-             * nothing is locked in.
+             * exercising judgment, they are doing data entry. So everything lands as
+             * evidence directly — a low-confidence mapping included, which used to
+             * wait as a draft in an exception queue. What marks the unsure one now is
+             * the confidence value it keeps: the chip on its row and the outstanding
+             * count read that (with no decider), not the status, so nothing waits
+             * anywhere while the record still says the machine was unsure. `draft` is
+             * written by nothing any more — it survives only on rows from before the
+             * confidence column existed, which is why `machineWritten` keeps its
+             * legacy leg. The PM's attention goes on the score, which is the part
+             * only they can do — and confirming, re-mapping, and rejecting all stay
+             * available in place, so nothing is locked in.
              */
-            status: o.confidence === "high" ? ("accepted" as const) : ("draft" as const),
+            status: "accepted" as const,
             confidence: o.confidence,
             mappingNote: o.mappingNote,
             layer: "L1" as const,
@@ -887,9 +897,21 @@ export const DecideObservationInput = z.object({
 });
 
 /**
- * Record the PM's decision on a drafted observation. "edited" may also re-map it
- * to a different sub-dimension — the machine's mapping is a suggestion, and
- * correcting it is a large part of what review is for.
+ * Record a person's ruling on a machine-filed observation. "edited" may also
+ * re-map it to a different sub-dimension — the machine's mapping is a
+ * suggestion, and correcting it is a large part of what deciding is for.
+ *
+ * **"accepted" with nothing else on it is the confirm verb (KTD18).** There is
+ * deliberately no separate "confirmed" decision: confirming a low-confidence
+ * filing must set the decider and change *nothing* else — status stays
+ * accepted (which the filing already is, KTD19), the row stays, the confidence
+ * and mapping note stay so the record keeps saying the machine was unsure, and
+ * no score's citation set moves — and that is exactly what this decision
+ * already does when no re-map rides along. What the decider buys is the exit
+ * from the re-extract blast radius: `machineWritten` excludes decided rows, so
+ * a confirmation survives the machine running again, where an unconfirmed
+ * filing is the machine's to replace. The chip and the outstanding count read
+ * the same thing (low confidence, no decider), so they clear on the same press.
  */
 export async function decideObservation(actor: Actor, observationId: string, raw: unknown) {
   assertMayAuthor(actor);

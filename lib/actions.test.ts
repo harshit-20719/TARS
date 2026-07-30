@@ -39,6 +39,7 @@ const importFirefliesCall = vi.fn<(...a: unknown[]) => Promise<unknown>>(async (
   callId: "c1",
   number: 2,
 }));
+const decideObservation = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
 
 vi.mock("@/lib/auth", () => ({
   auth: async () => signedIn,
@@ -55,15 +56,27 @@ vi.mock("@/lib/services/import", () => ({
 }));
 
 /**
+ * Partial on purpose: lib/actions.ts imports the module as a namespace, so only
+ * the member these tests reach needs to exist. The other capture services are
+ * covered against the real database in lib/services/capture.test.ts.
+ */
+vi.mock("@/lib/services/capture", () => ({
+  decideObservation: (...a: unknown[]) => decideObservation(...a),
+}));
+
+/**
  * Stubbed so a successful action can be inspected at all: revalidation runs
  * after the service returns and throws outside a request context, which would
  * otherwise leave the success path of every write action untestable here.
  */
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 
-const { importFirefliesCallAction, listFirefliesMeetingsAction, setRoleAction } = await import(
-  "./actions"
-);
+const {
+  decideObservationAction,
+  importFirefliesCallAction,
+  listFirefliesMeetingsAction,
+  setRoleAction,
+} = await import("./actions");
 
 /** One real row per role, so the database lookup in `currentActor` resolves. */
 const ids: Partial<Record<Role, string>> = {};
@@ -162,6 +175,43 @@ describe("setRoleAction", () => {
     expect(setRole).toHaveBeenCalledWith(
       expect.objectContaining({ role: Role.ADMIN }),
       { userId: "someone", role: "PARTNER" },
+    );
+  });
+});
+
+/**
+ * The confirm verb's guard (KTD18).
+ *
+ * Confirming is `decideObservationAction` carrying the accepted decision, and
+ * its guard is `requireAuthor` — the same guard as Move and Reject, because a
+ * confirmation is a person's ruling like any other. Every role authors, so
+ * "non-author" here means exactly one thing: nobody signed in. That is the
+ * refusal worth pinning at this layer; the decision's semantics are covered
+ * against the real database in lib/services/capture.test.ts.
+ */
+describe("decideObservationAction", () => {
+  beforeEach(() => decideObservation.mockClear());
+
+  it("refuses a signed-out caller the confirm, without reaching the service", async () => {
+    signedIn = null;
+
+    const result = await decideObservationAction("halten", "o1", { status: "accepted" });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.reauth).toBe(true);
+    expect(decideObservation).not.toHaveBeenCalled();
+  });
+
+  it("passes a signed-in author's confirmation through untouched", async () => {
+    signInAs(Role.PM);
+
+    const result = await decideObservationAction("halten", "o1", { status: "accepted" });
+
+    expect(result.ok).toBe(true);
+    expect(decideObservation).toHaveBeenCalledWith(
+      expect.objectContaining({ role: Role.PM }),
+      "o1",
+      { status: "accepted" },
     );
   });
 });

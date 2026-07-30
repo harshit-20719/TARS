@@ -14,14 +14,21 @@ export function progressOf(rec: DealRecord) {
   const activeObs = rec.observations.filter((o) => o.status !== "rejected").length;
 
   /**
-   * Observations still waiting on a person.
+   * Unconfirmed low-confidence filings — the observations still waiting on a
+   * person (KTD19).
    *
-   * A confidently mapped observation files itself as evidence now, so "drafts" no
-   * longer means "everything the machine wrote" — it means the mappings it was
-   * unsure about. That is the number worth putting in front of a PM, because it is
-   * the only one that represents work they still have to do.
+   * Every observation files itself as evidence now; nothing waits in a queue,
+   * so status cannot carry this count any more. What still represents work a
+   * person has is the filings the machine was unsure about that nobody has
+   * ruled on: low confidence, no decider. Confirming, moving, or rejecting one
+   * sets the decider and takes it out of the count. Rejected rows are excluded
+   * whatever they carry — there is nothing left to look at — and legacy rows
+   * (pre-confidence drafts) carry no confidence, so they never counted as
+   * unsure and do not now.
    */
-  const needsReview = rec.observations.filter((o) => o.status === "draft").length;
+  const needsReview = rec.observations.filter(
+    (o) => o.confidence === "low" && !o.decidedById && o.status !== "rejected",
+  ).length;
 
   const byKey = new Map(rec.scores.map((s) => [s.subDimensionKey, s]));
   const floorScored = FLOOR_SUBS.filter((s) => byKey.has(s.key)).length;
