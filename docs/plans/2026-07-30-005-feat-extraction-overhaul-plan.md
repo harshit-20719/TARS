@@ -16,8 +16,8 @@ deepened: 2026-07-30
 
 - **Objective:** Make one extraction click cheap, honest, and tunable. The model provider becomes Google Gemini at roughly a twentieth of today's cost, the drafts land better filed, an admin can shape how each macro dimension is read, and the record stops hiding what the machine failed to read.
 - **Product authority:** This plan owns the extraction path end to end — provider, prompt, filing, and the surfaces that report on a run. It does not touch scoring, judgment, or the framework's content. The authorship rule is unchanged and untouchable: the machine quotes, a person scores.
-- **Execution profile:** One migration, additive. Every schema change adds a table or a nullable column; nothing is dropped and no existing row is rewritten. The port is staged so the Anthropic path keeps working at every commit — the seam lands first, Anthropic moves behind it second, Gemini arrives third.
-- **Stop conditions:** Stop and ask if the Gemini adapter cannot distinguish "this block returned nothing" from "this block was blocked." That distinction gates a destructive delete (KTD5), and getting it wrong destroys a PM's evidence rather than failing a run. Stop if the verbatim guard's drop rate on a real transcript exceeds today's Anthropic baseline by more than a small margin — quotes stay verbatim (KTD3), so a weaker model shows up as lost observations, and that is the signal to escalate the model tier rather than proceed.
+- **Execution profile:** Migrations are additive. Every schema change adds a table or a nullable column; nothing is dropped and no existing row is rewritten. The port is staged so the Anthropic path keeps working at every commit — the seam lands first, Anthropic moves behind it second, Gemini arrives third.
+- **Stop conditions:** Stop and ask if the Gemini adapter cannot distinguish "this block returned nothing" from "this block was blocked." That distinction gates a destructive delete (KTD5), and getting it wrong destroys a PM's evidence rather than failing a run. Stop if the verbatim guard's drop count on the reference transcript exceeds the recorded Anthropic baseline by the fidelity margin in the Verification Contract — quotes stay verbatim (KTD3), so a weaker model shows up as lost observations, and that is the signal to escalate the model tier rather than proceed. Stop if any block of the reference transcript lands terminal on recitation: escalate the model tier (KTD2) or the provider (KTD1) rather than ship a deterministically unreadable block.
 - **Open blockers:** None. Two settled decisions carry recorded conflicts (KTD10, KTD12); both are workable as settled.
 
 ---
@@ -42,7 +42,7 @@ Nothing in the record says which prompt produced a filing. `SubDimensionScore.ru
 
 **Provider and cost**
 
-- R1. Extraction runs against Google Gemini by default, and against Anthropic when the deployment is configured for it. Neither provider's vocabulary appears outside its own adapter.
+- R1. Extraction runs against Google Gemini by default, and against Anthropic when the deployment is configured for it; when both providers are configured, Gemini wins. Neither provider's vocabulary appears outside its own adapter.
 - R2. The default model is pinned to an exact identifier, never a floating alias, so a re-point upstream cannot silently change price or behaviour.
 - R3. A run's model phase stays inside the existing per-block time bound, and the whole run inside the 60-second function ceiling, without changing how many model calls a run makes.
 - R4. Extraction is offered when any provider is configured. The UI names whichever credential is missing rather than naming one provider.
@@ -54,7 +54,7 @@ Nothing in the record says which prompt produced a filing. `SubDimensionScore.ru
 - R7. The sub-dimension key a model returns is constrained to the rows of the block it is reading, enforced on the wire where the provider supports it and re-validated in the adapter regardless.
 - R8. Every observation carries one clause saying why that row.
 - R9. Within one block, a transcript span supports at most one row.
-- R10. Across blocks, an identical span is filed once. The higher-confidence filing keeps it.
+- R10. Across blocks — and across partial re-runs — an identical span is filed once. The higher-confidence filing keeps it.
 
 **Filing and the deal flow**
 
@@ -206,7 +206,7 @@ The third row is the one this plan adds, and the reason it matters is the last c
 
 - Gemini's `anyOf: [{type: string}, {type: null}]` is the working nullable form. Verified present in the discovery document, not confirmed against a live call. If it is rejected, the fallback is an empty string with the field required — `speaker` and `timestamp` are already nullable-not-optional for exactly this class of reason.
 - Per-run cost and rate-limit figures come from third-party summaries; the vendor's pricing and limit pages are unreachable from this environment. Field names, enums, and SDK behaviour are verified against the live discovery document and the package source. The cost claim should be checked against one real invoice before the runbook's table is trusted.
-- Tokens per minute is the binding limit rather than requests per minute, at roughly 78k input tokens per run. Billing must be enabled on the project; the free tier allows about three concurrent runs.
+- Billing must be enabled on the Google project before the first production run, and data governance is the primary reason: free-tier AI Studio prompts may be used for product improvement, and these prompts are founder call transcripts naming real people and financials. The paid tier is what takes them out of that pool; verify the tier against the project before the first run, not the key alone. Throughput is the secondary reason — tokens per minute stays the binding rate limit, at roughly 78k input tokens per run.
 
 ### System-Wide Impact
 
@@ -223,9 +223,9 @@ The third row is the one this plan adds, and the reason it matters is the last c
 | Recitation refusals on a verbatim workload — quoting long documents verbatim is exactly what triggers them, and no safety setting disables it | A transcript is partially unextractable on the default provider | Quote-length caps in prompt and schema (U3); terminal classification so the UI stops inviting re-runs (KTD6); one-variable fallback to Anthropic (KTD1) | Terminal blocks on the run record; the drop-count threshold in the Verification Contract |
 | A blocked response read as an empty success | The re-run delete wipes a block's evidence and writes nothing back | The outcome contract inspects block and finish reasons before output (KTD5); the Definition of Done requires the blocked-response test to fail without the guard (U3) | That test; in production, a read block with zero rows on a transcript that plainly speaks to it |
 | Pricing and rate-limit figures are third-party | The cost case for the port is wrong, or the concurrency assumptions fail | Recorded in Assumptions; the runbook's cost table ships marked unverified (U13); one real invoice is checked before it is trusted | The first invoice |
-| Token-per-minute contention across simultaneous runs — six blocks share one bucket, so a limit lands on a random subset | Colliding runs trade retryable failures, and each press bills the full input again | Retryable classification with readable copy (KTD6); billing enablement recorded as an operator step (U13); residual accepted at pilot scale | Retryable failures clustering in the same minute across run records |
+| Token-per-minute contention across simultaneous runs — six blocks share one bucket, so a limit lands on a random subset | Colliding runs trade retryable failures, and each press bills the full input again | Retryable classification with readable copy (KTD6); billing enablement recorded as a pre-first-run data-governance step (U13); residual accepted at pilot scale | Retryable failures clustering in the same minute across run records |
 | SDK and schema-dialect churn | An upgrade moves the structured-output dialect and requests start failing | The exact version pin (KTD2's reasoning applied to the package); adapter isolation (KTD4); request-shape tests (U3) | U3's request-shape tests on any upgrade |
-| The migration lands on live rows | A deploy fails mid-migration, or a rollback runs old code against the new schema | Additive-only shape — nothing dropped or rewritten, so a prior build runs unchanged against the migrated database | The migration gate in the Verification Contract, run against a database holding existing rows |
+| Migrations land on live rows | A deploy fails mid-migration, or a rollback runs old code against the new schema | Additive-only shape — nothing dropped or rewritten, so a prior build runs unchanged against the migrated database | The migration gate in the Verification Contract, run against a database holding existing rows |
 | The nullable schema form is unconfirmed on the wire | The first Gemini request is rejected on schema | The fallback in Assumptions (empty string plus required); a rejection reports as a filing failure with readable text, never a silent wipe | The first deployed run |
 | Preview deployments share the production database | A preview carrying credentials writes production rows | The new credential names documented Production-only in the runbook's environment table (U13), as the existing keys are | `/api/health` on a preview reporting extraction enabled |
 
@@ -330,7 +330,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 
 **Goal:** Add the Gemini adapter, and make certain that no outcome except a validated read can be mistaken for a read.
 
-**Requirements:** R1, R2, R3, R5, R6, R7; per KTD2, KTD5, KTD6, KTD8.
+**Requirements:** R1, R2, R3, R5, R6, R7, R8; per KTD2, KTD3, KTD5, KTD6, KTD8.
 
 **Dependencies:** U1.
 
@@ -364,6 +364,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 - A sub-dimension key outside the block's rows fails validation in the adapter and reports as a filing failure.
 - The request carries a JSON schema with a real `enum` for the block's rows, `additionalProperties: false`, and no `$schema` key.
 - The request orders the quote before the confidence.
+- The request schema requires the mapping note on every observation — an observation without one fails validation in the adapter.
 - A 2.5 model receives a zero thinking budget and no thinking level; a 3.x model receives a minimal level and no budget; neither receives both.
 - All four harm categories are set off, and no model-armour configuration is sent alongside them.
 - Retry attempts are one.
@@ -389,7 +390,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 
 **Approach:**
 
-1. `resolveProvider()` returns the active provider, its model, and which credential is missing when none is configured. Extraction is enabled when any provider is configured, so the gate becomes a disjunction and the copy cannot name one variable.
+1. `resolveProvider()` returns the active provider, its model, and which credential is missing when none is configured. Extraction is enabled when any provider is configured, so the gate becomes a disjunction and the copy cannot name one variable. When both providers are configured, Gemini wins — matching KTD1's default, so adding the Gemini key is the cutover and removing it is the fallback.
 2. Replace the health route's Anthropic assumptions. It currently publishes Anthropic parameter names as a request-shape field, which on a Gemini deployment prints the wrong provider's parameters — the opposite of what its own docstring promises. Report the provider, the resolved model, the block count, and whether extraction is enabled. Drop the effort field when it does not apply.
 3. Update the copy in both components and the transcript page so it names the missing credential rather than a fixed one. Preserve the existing intent: the button's absence must be explained, not silent.
 4. Where a block failed terminally, the button says the block cannot be read from this transcript and does not invite a re-run. A retryable failure keeps today's wording.
@@ -398,6 +399,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 **Test scenarios:**
 - Configuring only the Gemini credential enables extraction and reports Gemini as the provider.
 - Configuring only the Anthropic credential enables extraction and reports Anthropic.
+- Configuring both credentials enables extraction and reports Gemini as the active provider.
 - Configuring neither disables extraction and produces copy naming both credentials.
 - The health payload names the active provider and its model, and omits the Anthropic-only effort field on a Gemini deployment.
 - A terminal block failure renders without a re-run invitation; a retryable one renders with it.
@@ -465,6 +467,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 3. Key on the normalised quote. Highest confidence wins; ties break on rubric order so the outcome is deterministic. Record every losing pair of rubric key and quote.
 4. Repoint claims. A claim anchored to a losing pair is re-anchored to the winner before the transaction builds its anchor map. Report the merge count.
 5. Fix the keying inconsistency this exposes: the verbatim guard's kept-set is keyed on the quote alone while the anchor map is keyed on rubric key and quote, so a claim can already survive verification anchored to another block's observation and then be dropped in the transaction with no counter. Make both keys the same, and count what is dropped.
+6. Hold the invariant across partial re-runs, inside the transaction: compare the run's surviving filings against persisted undecided filings from blocks outside this run's read set, keyed the same way, with the same higher-confidence rule and the same claim repointing. This is one indexed read of the call's undecided rows; without it, a re-run that read one block reinserts a span an unread block's surviving row already carries — the two-rows state R10 forbids.
 
 **Execution note:** The existing two-block same-quote claim test is the specification here. It must keep passing, and it passes only if repointing works — so run it against the dedupe pass before wiring the pass into the orchestrator.
 
@@ -476,6 +479,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 - Two distinct spans within one block, filed against different rows, both survive.
 - The same span returned twice by one block collapses to one filing.
 - The merge count reaches the action's result.
+- A partial re-run returning a span already filed by an unread block's surviving undecided observation keeps one filing — the higher-confidence one — and repoints claims to it.
 - The prompt no longer instructs the model that a passage may support several rows.
 
 **Verification:** `npm run test:services` green, including the pre-existing two-block claim test unmodified in intent.
@@ -529,7 +533,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 
 1. Write low-confidence observations `accepted`, keeping the confidence value. Nothing is written `draft` any more.
 2. Keep the legacy leg of the re-extract predicate. It catches rows written before the confidence column existed, and without it a forced re-run duplicates them instead of replacing them. A test pins this.
-3. Add a confirm verb that sets the decider and changes nothing else. Do not clear the confidence: the record should keep saying the machine was unsure while the row stops asking for attention.
+3. Add a confirm verb that sets the decider and changes nothing else. Do not clear the confidence: the record should keep saying the machine was unsure while the row stops asking for attention. The control renders only where the warning chip renders — low confidence, no decider — sits beside Move and Reject, and disables while the action is pending; on success the button and the chip disappear together, because the decider is now set.
 4. Gate the warning chip on there being no decider rather than on the confidence value. Remove the second chip that read the old draft status.
 5. Redefine the outstanding count as low confidence with no decider and not rejected. That is the number representing work a person still has.
 6. Note the consequence, which is the point of the verb: a decided row falls outside the re-extract blast radius, so a confirmation survives the machine running again — where today only a move does.
@@ -542,6 +546,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 - Confirming sets the decider, leaves the status and the sub-dimension alone, and keeps the confidence value.
 - A confirmed row is not deleted by a subsequent extraction of the same call; an unconfirmed low-confidence row is.
 - The warning chip renders for low confidence with no decider, and not once confirmed.
+- The confirm control appears beside Move and Reject only on rows carrying the warning chip, disables while pending, and disappears with the chip on success.
 - The outstanding count reflects unconfirmed low-confidence rows only, and reaches zero when all are confirmed.
 - Move and reject still reach a low-confidence filing from the capture page.
 - A non-author cannot confirm.
@@ -573,6 +578,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 4. Rebuild the page around the run record. Its current summary cells are the axes of a queue it no longer is; the useful ones are which blocks were read, which failed and whether retrying can help, the dropped-quote and merged-span counts, and the confidence mix. Keep it read-only: no verb on this page.
 5. The board's empty state currently claims every observation was mapped confidently, which is false whenever any row was low-confidence. It needs a non-empty branch that is not the queue, or replacement.
 6. Surface the unread-block count on the transcript card too, since that is where a PM stands when they decide whether to re-run.
+7. Name the state before any run exists: with no per-block run records, the reading says extraction has not run on this deal yet and points at the transcript step — distinct from every block read and nothing dropped.
 
 **Test scenarios:**
 - The numbered flow no longer contains review, and the remaining steps number consecutively.
@@ -584,6 +590,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 - The page renders the unconfirmed low-confidence count.
 - The sidebar entry's state string shows the unconfirmed low-confidence count, and reads clear when there are none.
 - With every block read and nothing dropped, the page says so without claiming everything was confident.
+- With no run records at all, the page says extraction has not run yet and points at the transcript step — distinct from the all-read state.
 - The page offers no mutation.
 - The transcript card shows an unread-block count after a partial run, and none after a full one.
 
@@ -608,7 +615,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 
 **Approach:**
 
-1. One row per rubric, unique on the rubric key, carrying the persona, the guidance, the temperature, a monotonic version, an updated-at, and who updated it. Note the key collision hazard: one rubric's key matches a role name, so do not switch on it loosely.
+1. One row per rubric, unique on the rubric key, carrying the persona, the guidance, the temperature, a monotonic version, an updated-at, and who updated it. Note the key collision hazard: one rubric's key matches a role name, so do not switch on it loosely. This is the plan's second migration — U5's, with U7's lease column folded in, is the first.
 2. Add the temperature cap as a named `CHECK` constraint in the migration, under the existing comment convention for integrity the schema language cannot express. The cap is absolute, which is what makes it a constraint rather than a domain rule — the distinction the migrations already draw.
 3. Stamp the configuration version on the observation as a nullable column, mirroring the score's rubric version and for the same stated reason.
 4. Read through absent rows. The repository synthesizes the empty shape — the same choice already made for an absent founder-type read — because the production build runs migrations and never the seed.
@@ -651,7 +658,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 2. Add the authority predicate next to the existing one rather than reusing it, so the intent is legible at the call site.
 3. Load through the seam, never Prisma directly.
 4. Reuse the established form pieces: the action hook for pending and error state, the error component, the dirty comparison against props, and the save button's literal shape. Take the re-authentication flag from whichever hook produced the message — two components have a live bug from combining it across hooks.
-5. Use the discrete button strip for the capped temperature, which is the house shape for a bounded scale, and carry over its over-cap treatment: mark the unreachable values and explain in a sentence rather than adding a second control.
+5. Use the discrete button strip for the capped temperature, which is the house shape for a bounded scale — but drop the banking half of the slide pattern's over-cap treatment. An above-cap temperature is refused, not banked, so values above the cap render disabled or are omitted from the strip, with a title naming the cap; keep the pattern's one explanatory sentence rather than adding a second control.
 6. Show the last run's dropped-quote count for that rubric beside its controls, labelled with the version it ran under, so the number is comparable to the text that produced it.
 7. Where the active provider ignores temperature, say so on the control rather than letting a save produce a failing run.
 8. Add the nav entry, gated on a boolean computed on the server. The chip must not re-derive authority from the role client-side.
@@ -664,6 +671,7 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 - The save action called by a partner is refused and the service is never reached.
 - An admin's save reaches the service and revalidates the page.
 - A temperature above the cap is refused with a message naming the cap.
+- Values above the cap are not pressable — disabled or absent, with the cap explained beside the control.
 - The form is not dirty on load, becomes dirty on edit, and reports saved after a successful write.
 - A validation error renders against the field that caused it.
 - The nav entry renders for an admin and not for a PM.
@@ -751,10 +759,11 @@ U1 through U4 are the port, and the Anthropic path keeps working at every one of
 | Migration | `npm run db:migrate` | U5, U7, U10 | applies clean on a database holding existing rows |
 | Health | `GET /api/health` | U4 | reports the active provider and its model |
 
-Two quality thresholds gate the port rather than a boolean:
+Three quality thresholds gate the port rather than a boolean:
 
 - **Latency.** A real forty-minute transcript completes inside the block bound on the default model, with the whole run inside the function ceiling. Measured from a deployed run, not locally.
-- **Fidelity.** The verbatim guard's drop count on that transcript is not materially worse than the Anthropic baseline at `74f04cd`. Quotes stay verbatim (KTD3), so a weaker model shows up here first. A materially worse count is the signal to escalate the model tier per KTD2, not to relax the guard.
+- **Fidelity.** Measured against a recorded baseline, not by feel: before the Gemini path lands, run the reference transcript at `74f04cd` and record the verbatim guard's drop count. Gemini fails the gate — and triggers the KTD2 escalation — when it drops more than two additional quotes or 25% more, whichever is larger. The margin is provisional and cheap to move; what is not optional is that a number exists before the comparison is made. Quotes stay verbatim (KTD3), so a weaker model shows up here first — escalate the tier, never relax the guard.
+- **Terminal outcomes.** The reference transcript records zero terminal block outcomes on the default model. A recitation refusal fires before any quotes exist, so the fidelity gate cannot see it — this threshold is the gate for the plan's top-named risk. One terminal block on the reference transcript is the signal to escalate per KTD2 or fall back per KTD1, not to ship.
 
 Postgres in a fresh container needs starting before the services suite: `service postgresql start`, port 5433.
 
@@ -765,7 +774,7 @@ Postgres in a fresh container needs starting before the services suite: `service
 **Global**
 
 - Every gate in the Verification Contract passes.
-- One migration, additive: new tables and nullable columns only. It applies to a database holding existing observations without rewriting one.
+- Migrations are additive: new tables and nullable columns only, nothing dropped or rewritten. They apply to a database holding existing observations without rewriting a row.
 - No provider's vocabulary appears outside its own adapter, and no server action's module graph reaches a provider SDK.
 - Every failure a provider can produce reaches a PM as readable text. Nothing escapes as a message-less error — this is the bug that was diagnosed wrong twice, and the invariant that prevents it is that only the recognised error type renders.
 - A block that produced no usable output is never recorded as read, and therefore never causes a prior run's rows to be deleted.
