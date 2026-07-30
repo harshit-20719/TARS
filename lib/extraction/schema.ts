@@ -78,6 +78,85 @@ export function outputSchemaFor(rubric: Rubric) {
 }
 
 /**
+ * The same block schema, projected into the JSON-Schema subset Gemini's
+ * structured output actually honours.
+ *
+ * Hand-built rather than generated from the Zod schema above, because the
+ * target is not JSON Schema — it is Gemini's *subset* of it, and the ways a
+ * generator misses that subset are all silent or fatal. `$schema` at the top
+ * level is a 400. `maxLength`, `pattern`, `allOf`, `const` are simply not in
+ * the supported keyword list, so a generator that emits them produces a schema
+ * that looks stricter than what the model is actually held to. Building the
+ * projection by hand from the same frozen rubric keeps every keyword inside
+ * the supported set by construction: `$id $defs $ref $anchor type format title
+ * description enum items prefixItems minItems maxItems minimum maximum anyOf
+ * oneOf properties additionalProperties required propertyOrdering`.
+ *
+ * Three deliberate choices:
+ *
+ * - `subDimensionKey` is a real `enum` of this block's rows — the same
+ *   cross-filing impossibility outputSchemaFor establishes, enforced by the
+ *   provider's constrained decoding rather than merely re-checked after.
+ * - Nullable fields are spelled `anyOf: [{type}, {type: "null"}]`, the one
+ *   nullability shape this subset supports (`nullable` is OpenAPI, not here).
+ * - `propertyOrdering` puts `quote` before `confidence`: ordering controls
+ *   *generation* order, and a model that writes the quote down first is rating
+ *   a quote it has already committed to, not one it is still free to bend
+ *   toward the confidence it just claimed.
+ *
+ * No length caps anywhere — `maxLength` is unsupported, so the quote-length
+ * bound has to be a prompt-side instruction (U6), not a schema clause.
+ *
+ * The Zod re-validation in the adapter stays regardless of this projection:
+ * constrained decoding guarantees shape, not semantics, and the guard on what
+ * enters the ledger belongs to the adapter (KTD9).
+ */
+export function geminiResponseJsonSchemaFor(rubric: Rubric): Record<string, unknown> {
+  const keys = rubric.subs.map((s) => s.key);
+  const nullableString = { anyOf: [{ type: "string" }, { type: "null" }] };
+
+  const observation = {
+    type: "object",
+    properties: {
+      quote: { type: "string" },
+      speaker: nullableString,
+      timestamp: nullableString,
+      subDimensionKey: { type: "string", enum: keys },
+      mappingNote: { type: "string" },
+      confidence: { type: "string", enum: [...CONFIDENCE] },
+    },
+    // Every field, mappingNote included: an observation with no note is not a
+    // shorter observation, it is one the PM cannot read the filing of.
+    required: ["quote", "speaker", "timestamp", "subDimensionKey", "mappingNote", "confidence"],
+    additionalProperties: false,
+    propertyOrdering: ["quote", "speaker", "timestamp", "subDimensionKey", "mappingNote", "confidence"],
+  };
+
+  const claim = {
+    type: "object",
+    properties: {
+      text: { type: "string" },
+      anchorQuote: { type: "string" },
+      originTag: { type: "string", enum: [...ORIGIN_TAGS] },
+    },
+    required: ["text", "anchorQuote", "originTag"],
+    additionalProperties: false,
+    propertyOrdering: ["text", "anchorQuote", "originTag"],
+  };
+
+  return {
+    type: "object",
+    properties: {
+      observations: { type: "array", items: observation },
+      claims: { type: "array", items: claim },
+    },
+    required: ["observations", "claims"],
+    additionalProperties: false,
+    propertyOrdering: ["observations", "claims"],
+  };
+}
+
+/**
  * The whole-rubric schema. Retained for the single-pass path — the health check's
  * request-shape report reads it, and it is what a caller extracting against every
  * row at once would use.

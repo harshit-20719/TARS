@@ -42,7 +42,16 @@ process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 export default defineConfig({
   resolve: {
-    alias: { "@": path.resolve(__dirname) },
+    alias: {
+      "@": path.resolve(__dirname),
+      /**
+       * The Gemini adapter opens with `import "server-only"`, whose default
+       * (non-react-server) build throws on import by design — that is the
+       * guard. Vitest runs under the default condition, so the tests resolve
+       * the marker to the package's own react-server build, which is empty.
+       */
+      "server-only": path.resolve(__dirname, "node_modules/server-only/empty.js"),
+    },
   },
   test: {
     environment: "node",
@@ -54,6 +63,10 @@ export default defineConfig({
       // Kept unset on purpose: the extraction tests inject a stub client, and a
       // real key here would let a bug reach the live API from a test run.
       ANTHROPIC_API_KEY: "",
+      // The Gemini adapter's credentials, unset for the same reason — its
+      // tests inject a stub client and must never reach the live API.
+      GOOGLE_API_KEY: "",
+      GEMINI_API_KEY: "",
       // Same reasoning, and one more: the Fireflies account holds every call
       // Biome has recorded, so a test that reached it would be reading founder
       // transcripts from a suite run.
