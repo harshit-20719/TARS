@@ -2,10 +2,10 @@
  * The write side of user management: who holds an account, and what role they
  * hold (R2, R4, R6).
  *
- * The only service in the app that is not about the deal record, and the only
- * one whose permission check narrows anything — since U1 every role authors, so
- * `assertMayAuthor` admits everybody and `assertMayManageUsers` is the last
- * gate standing.
+ * One of the two services not about the deal record, and one of the two whose
+ * permission check narrows anything (the other is extraction tuning, in
+ * extractionConfig.ts) — since U1 every role authors, so `assertMayAuthor`
+ * admits everybody and the ADMIN-only gates are the ones left standing.
  *
  * Like the capture services, this takes the acting user as an argument rather
  * than reading the session, so the suite can drive it directly. lib/actions.ts

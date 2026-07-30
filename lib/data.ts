@@ -24,9 +24,13 @@ import { cache } from "react";
 import { connection } from "next/server";
 import * as repo from "@/lib/repo/records";
 import type { ReassignCandidate } from "@/lib/repo/records";
+import {
+  listExtractionConfigs,
+  type RubricExtractionConfig,
+} from "@/lib/repo/extractionConfig";
 import type { Call, Deal, DealRecord, Person } from "@/mock/types";
 
-export type { ReassignCandidate };
+export type { ReassignCandidate, RubricExtractionConfig };
 
 /**
  * Every deal, or only the ones a given account holds (R7, KTD9).
@@ -100,3 +104,17 @@ export async function listReassignCandidates(): Promise<ReassignCandidate[]> {
   await connection();
   return repo.listReassignCandidates();
 }
+
+/**
+ * Every rubric's extraction tuning, for the admin page (U11).
+ *
+ * Always six entries in framework order, with the default shape synthesized for
+ * any rubric nobody has tuned (KTD15) — the page renders a section per rubric
+ * either way. Request-time for the same reason as the rest of the seam: a save
+ * must be visible on the next load, not the next deploy. Memoised like
+ * `getDeal`, so a layout and its page asking in one render share the query.
+ */
+export const getExtractionConfigs = cache(async (): Promise<RubricExtractionConfig[]> => {
+  await connection();
+  return listExtractionConfigs();
+});

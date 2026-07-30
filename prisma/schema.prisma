@@ -64,9 +64,9 @@ enum ExtractionOutcome {
 
 /// Where a claim came from. Hyphenated on the wire to match the record type.
 enum OriginTag {
-  founderVolunteered              @map("founder-volunteered")
-  founderConfirmedAfterPmFraming  @map("founder-confirmed-after-PM-framing")
-  machineInferred                 @map("machine-inferred")
+  founderVolunteered             @map("founder-volunteered")
+  founderConfirmedAfterPmFraming @map("founder-confirmed-after-PM-framing")
+  machineInferred                @map("machine-inferred")
 }
 
 /// At L1 the ledger opens at "claimed" only; validated/refuted are L2.
@@ -227,10 +227,18 @@ model Observation {
 
   /// How sure the machine was about the row it chose. Null on rows written
   /// before this existed, and on anything a human filed or re-mapped by hand.
-  confidence MappingConfidence?
+  confidence  MappingConfidence?
   /// One clause on why this row — "names a specific paying customer". Read while
   /// scoring, so a mis-filing is caught in place instead of in a separate pass.
   mappingNote String?
+
+  /// Which extraction-config version drafted this row, mirroring the score's
+  /// rubricVersion and for the same reason: a later tuning edit stays traceable
+  /// to the text that was live when the machine wrote this. Null on every row
+  /// written before per-rubric config existed, and on rows drafted under a
+  /// rubric nobody has tuned — an absent config has no version to stamp. The
+  /// run writes it from U12; nothing sets it yet.
+  configVersion Int?
 
   /// Who accepted / edited / rejected it, and when.
   decidedById String?
@@ -347,7 +355,7 @@ model Slide {
   /// mechanical observation, a confirmed one is the PM's stated reason, and the
   /// scorecard is allowed to say which it is looking at.
   guardConfirmed   Boolean @default(false)
-  layer            Layer  @default(L1)
+  layer            Layer   @default(L1)
 
   authorId String?
   author   User?   @relation("SlideAuthor", fields: [authorId], references: [id], onDelete: SetNull)
@@ -382,6 +390,42 @@ model FounderTypeRead {
   @@index([authorId])
 }
 
+// ---------------------------------------------------------------- tuning
+
+/// How one macro dimension's extraction is tuned: a persona, a guidance note,
+/// and a temperature, per rubric (R17–R19; KTD13–KTD15).
+///
+/// At most six rows, unique on the framework key — and an absent row is a valid
+/// state, not an error: the production build runs migrations and never the seed
+/// (KTD15), so the repository reads through a missing row as persona "",
+/// guidance "", temperature 0, and no version, the way it already synthesizes
+/// an absent founder-type read. An admin's first save creates the row.
+///
+/// `version` is monotonic — created at 1, bumped on every save — and is what an
+/// observation's configVersion stamp points back to, so a later tuning edit
+/// stays traceable to the text that produced a draft. The temperature cap
+/// (0..0.4) is absolute, which makes it a named CHECK in the migration rather
+/// than a domain rule — the distinction the migrations already draw.
+///
+/// The key collision hazard, stated where the key lives: the rubric "pm" is
+/// Problem & Market, not the Role PM. Never switch loosely on this column.
+model RubricExtractionConfig {
+  id          String @id @default(cuid())
+  rubricKey   String @unique
+  persona     String @default("")
+  guidance    String @default("")
+  temperature Float  @default(0)
+  version     Int    @default(1)
+
+  updatedById String?
+  updatedBy   User?   @relation("ExtractionConfigTuner", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([updatedById])
+}
+
 // ------------------------------------------------------------------ auth
 // Auth.js v5 with the Prisma adapter. Sessions are JWT-strategy (required by the
 // dev credentials provider), so the Session model is kept for adapter
@@ -400,12 +444,13 @@ model User {
   accounts Account[]
   sessions Session[]
 
-  ownedDeals           Deal[]              @relation("DealOwner")
-  importedCalls        Call[]              @relation("CallImporter")
-  authoredScores       SubDimensionScore[] @relation("ScoreAuthor")
-  authoredSlides       Slide[]             @relation("SlideAuthor")
-  authoredFounderReads FounderTypeRead[]   @relation("FounderReadAuthor")
-  observationDecisions Observation[]       @relation("ObservationDecider")
+  ownedDeals             Deal[]                   @relation("DealOwner")
+  importedCalls          Call[]                   @relation("CallImporter")
+  authoredScores         SubDimensionScore[]      @relation("ScoreAuthor")
+  authoredSlides         Slide[]                  @relation("SlideAuthor")
+  authoredFounderReads   FounderTypeRead[]        @relation("FounderReadAuthor")
+  observationDecisions   Observation[]            @relation("ObservationDecider")
+  tunedExtractionConfigs RubricExtractionConfig[] @relation("ExtractionConfigTuner")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

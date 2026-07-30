@@ -36,6 +36,16 @@ export const canAuthorRecord = (role: Role): boolean => AUTHOR_ROLES.includes(ro
 
 export const canManageUsers = (role: Role): boolean => role === Role.ADMIN;
 
+/**
+ * Whether this role may shape what the machine is told — the per-rubric
+ * personas, guidance, and temperatures (R17). ADMIN-only, and deliberately its
+ * own predicate rather than a reuse of `canManageUsers`: the two happen to
+ * admit the same role today, but "may change who holds a role" and "may change
+ * what every extraction reads" are different decisions, and the nav computes
+ * this one on the server from exactly this function.
+ */
+export const canTuneExtraction = (role: Role): boolean => role === Role.ADMIN;
+
 /** Every authenticated role may read a deal record. */
 export const canReadRecord = (_role: Role): boolean => true;
 
@@ -71,18 +81,36 @@ export function assertMayAuthor(actor: Actor): void {
 }
 
 /**
- * Throw unless this actor may manage people. The one thing role still gates.
+ * Throw unless this actor may manage people — one of the two things role still
+ * gates, the other being `assertMayTuneExtraction` below.
  *
- * Since U1 every role authors the record, so `assertMayAuthor` narrows nothing —
- * which leaves this as the only assertion here that refuses anybody. It is
- * spelled as an `assertMay*` sibling rather than left as the bare predicate
- * because that is the shape every service reaches for, and a caller writing
- * `if (!canManageUsers(...))` by hand is a caller who can forget the `!`.
+ * Since U1 every role authors the record, so `assertMayAuthor` narrows nothing.
+ * It is spelled as an `assertMay*` sibling rather than left as the bare
+ * predicate because that is the shape every service reaches for, and a caller
+ * writing `if (!canManageUsers(...))` by hand is a caller who can forget the
+ * `!`.
  */
 export function assertMayManageUsers(actor: Actor): void {
   if (!canManageUsers(actor.role)) {
     throw new NotAuthorized(
       `Managing people is limited to ${Role.ADMIN}; you are signed in as ${actor.role}.`,
+    );
+  }
+}
+
+/**
+ * Throw unless this actor may tune extraction (R17, KTD12).
+ *
+ * Not the author guard: every role authors (see AUTHOR_ROLES), so that guard
+ * refuses nobody who is signed in — the exact failure the people-page comments
+ * warn about. What an admin writes here is read into every future run for
+ * every deal, which is a machine-wide lever rather than one record's content,
+ * so it takes the narrow gate.
+ */
+export function assertMayTuneExtraction(actor: Actor): void {
+  if (!canTuneExtraction(actor.role)) {
+    throw new NotAuthorized(
+      `Tuning extraction is limited to ${Role.ADMIN}; you are signed in as ${actor.role}.`,
     );
   }
 }
