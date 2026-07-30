@@ -2,13 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 import {
   BLOCK_TIMEOUT_MS,
-  DEFAULT_EXTRACTION_MODEL,
   ExtractionError,
   extractFromTranscript,
   isVerbatim,
   normaliseForComparison,
   describeApiFailure,
-  thinkingConfigFor,
   verifyDrafts,
   type ExtractionClient,
 } from "./extract";
@@ -83,33 +81,11 @@ function stub(
 }
 
 /**
- * The run has to finish inside one serverless function call, and these two
- * numbers are the whole of what holds it there.
+ * The run has to finish inside one serverless function call. The per-request
+ * bound and retry setting are the adapter's (providers/anthropic.test.ts);
+ * what belongs to the fan-out is that the bound reaches *every* block.
  */
 describe("the time budget", () => {
-  it("bounds each block's wait", async () => {
-    const { client, opts } = stub({ observations: [], claims: [] });
-    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, blocks: [ONE_BLOCK] });
-
-    expect(opts[0]?.timeout).toBe(BLOCK_TIMEOUT_MS);
-  });
-
-  /**
-   * The load-bearing one, and the reason the block above is not enough on its
-   * own. The SDK retries twice by default and a timeout is one of the things it
-   * retries, so a timeout alone bounds an attempt at thirty seconds and a block
-   * at ninety — past the sixty-second ceiling the whole design is sized against.
-   * When that happened the function was killed rather than returning, so no
-   * error object reached anyone and the browser showed "an unexpected response
-   * was received from the server" with nothing behind it.
-   */
-  it("disables the SDK's retries, so the wait is the block's and not one attempt's", async () => {
-    const { client, opts } = stub({ observations: [], claims: [] });
-    await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, blocks: [ONE_BLOCK] });
-
-    expect(opts[0]?.maxRetries).toBe(0);
-  });
-
   it("bounds every block in the fan-out, not just the first", async () => {
     const { client, opts } = stub({ observations: [], claims: [] });
     await extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client });
@@ -346,54 +322,6 @@ describe("extractFromTranscript", () => {
     ).rejects.toThrow(/ANTHROPIC_API_KEY is not valid/);
   });
 
-  /**
-   * Renamed rather than deleted: it used to assert thinking stayed on, and the
-   * latency budget is exactly why that changed. `max_tokens` caps thinking and
-   * output together, so on a long transcript the thinking was competing with the
-   * drafts — and five of six blocks missed the deadline.
-   */
-  it("turns thinking off, at the effort the latency budget allows", async () => {
-    const { client, calls } = stub(output());
-    await extractFromTranscript(
-      { transcript: TRANSCRIPT, callNumber: 1 },
-      { client, blocks: [ONE_BLOCK] },
-    );
-    expect(calls[0].thinking).toEqual({ type: "disabled" });
-    expect((calls[0].output_config as { effort: string }).effort).toBe("low");
-  });
-
-  it("defaults the model but honours EXTRACTION_MODEL", async () => {
-    const { client, calls } = stub(output());
-    await extractFromTranscript(
-      { transcript: TRANSCRIPT, callNumber: 1 },
-      { client, blocks: [ONE_BLOCK] },
-    );
-    expect(calls[0].model).toBe(DEFAULT_EXTRACTION_MODEL);
-
-    vi.stubEnv("EXTRACTION_MODEL", "claude-sonnet-5");
-    const second = stub(output());
-    await extractFromTranscript(
-      { transcript: TRANSCRIPT, callNumber: 1 },
-      { client: second.client, blocks: [ONE_BLOCK] },
-    );
-    expect(second.calls[0].model).toBe("claude-sonnet-5");
-    vi.unstubAllEnvs();
-  });
-
-  it("surfaces a refusal instead of reading empty content as a result", async () => {
-    const { client } = stub(null, { stop_reason: "refusal", stop_details: { category: "cyber" } });
-    await expect(
-      extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, blocks: [ONE_BLOCK] }),
-    ).rejects.toThrow(/declined/);
-  });
-
-  it("throws when the model returns nothing parseable", async () => {
-    const { client } = stub(null);
-    await expect(
-      extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client, blocks: [ONE_BLOCK] }),
-    ).rejects.toThrow(ExtractionError);
-  });
-
   it("refuses an empty transcript before calling the model", async () => {
     const { client, calls } = stub(output());
     await expect(
@@ -494,141 +422,6 @@ describe("the output schema", () => {
   it("offers only high and low confidence, so it cannot become a score", () => {
     const element = outputSchemaFor(RUBRICS[0]).shape.observations.element;
     expect(element.shape.confidence.options).toEqual(["high", "low"]);
-  });
-});
-
-describe("thinking config per model generation", () => {
-  afterEach(() => vi.unstubAllEnvs());
-
-  /**
-   * Off by default, because with it on five of the six blocks on a real
-   * forty-minute transcript did not finish inside the block timeout. `max_tokens`
-   * caps thinking and output together, so on this task thinking competes with the
-   * drafts for the same budget.
-   */
-  it.each([
-    "claude-opus-5",
-    "claude-sonnet-5",
-    "claude-opus-4-8",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5",
-    "claude-sonnet-4-5",
-  ])("asks %s not to think", (model) => {
-    expect(thinkingConfigFor(model).thinking, model).toEqual({ type: "disabled" });
-  });
-
-  it("still sets an effort level on 4.6-and-later, which applies with thinking off", () => {
-    for (const model of ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-4-6"]) {
-      expect(thinkingConfigFor(model), model).toEqual({
-        thinking: { type: "disabled" },
-        effort: "low",
-      });
-    }
-  });
-
-  /**
-   * The case that made this function necessary, and the half of it that has
-   * nothing to do with thinking: Haiku 4.5 rejects `effort` outright, so pasting
-   * EXTRACTION_MODEL straight into the request would 400 rather than merely run
-   * worse. It is also the model someone reaches for precisely to make this step
-   * cheaper — which the timeouts now make tempting.
-   */
-  it.each(["claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-sonnet-4-5", "claude-opus-4-1"])(
-    "gives %s no effort level, whatever the thinking setting",
-    (model) => {
-      expect(thinkingConfigFor(model).effort).toBeUndefined();
-      vi.stubEnv("EXTRACTION_THINKING", "on");
-      expect(thinkingConfigFor(model).effort).toBeUndefined();
-    },
-  );
-
-  /**
-   * The bug this function was written to make impossible. Read on `effort`
-   * rather than on `thinking`, because with thinking off by default both
-   * generations return the same thinking shape — `effort` is what still
-   * separates them, and it is the field that actually 400s.
-   */
-  it("does not read the 5 in a 4-5 id as the 5 series", () => {
-    expect(thinkingConfigFor("claude-haiku-4-5").effort).toBeUndefined();
-    expect(thinkingConfigFor("claude-opus-5").effort).toBe("low");
-
-    vi.stubEnv("EXTRACTION_THINKING", "on");
-    expect(thinkingConfigFor("claude-haiku-4-5").thinking).not.toEqual({ type: "adaptive" });
-    expect(thinkingConfigFor("claude-opus-5").thinking).toEqual({ type: "adaptive" });
-  });
-
-  it("treats an unrecognised id as modern, the likelier direction", () => {
-    expect(thinkingConfigFor("claude-something-new").effort).toBe("low");
-  });
-
-  it("lets EXTRACTION_EFFORT raise the level without a code change", () => {
-    // The escape hatch for short transcripts that can afford more.
-    vi.stubEnv("EXTRACTION_EFFORT", "high");
-    expect(thinkingConfigFor("claude-sonnet-5").effort).toBe("high");
-  });
-
-  /** The other escape hatch: thinking back on, per generation, no code change. */
-  it("lets EXTRACTION_THINKING put thinking back, in the shape each generation takes", () => {
-    vi.stubEnv("EXTRACTION_THINKING", "on");
-    expect(thinkingConfigFor("claude-sonnet-5").thinking).toEqual({ type: "adaptive" });
-    expect(thinkingConfigFor("claude-haiku-4-5").thinking).toEqual({
-      type: "enabled",
-      budget_tokens: 4000,
-    });
-  });
-
-  it("keeps the pre-4.6 budget below max_tokens, which the API requires", () => {
-    vi.stubEnv("EXTRACTION_THINKING", "on");
-    const budget = (thinkingConfigFor("claude-haiku-4-5").thinking as { budget_tokens: number })
-      .budget_tokens;
-    // max_tokens is sized for one block now, not for the whole rubric.
-    expect(budget).toBeLessThan(8000);
-  });
-
-  it("sends what the model generation accepts, end to end", async () => {
-    // One block each, so the assertions below read the request for the model named
-    // rather than whichever of six concurrent calls happened to land first.
-    const run = async (model: string) => {
-      const { client, calls } = stub(output());
-      await extractFromTranscript(
-        { transcript: TRANSCRIPT, callNumber: 1 },
-        { client, model, blocks: [ONE_BLOCK] },
-      );
-      return calls[0];
-    };
-
-    const haiku = await run("claude-haiku-4-5");
-    const opus = await run("claude-opus-5");
-
-    // Thinking off by default on both, in the one shape every generation accepts.
-    expect(haiku.thinking).toEqual({ type: "disabled" });
-    expect(opus.thinking).toEqual({ type: "disabled" });
-    // The 400-avoidance, which is what this test is really for: effort reaches the
-    // 5-series request and never reaches Haiku's.
-    expect((haiku.output_config as Record<string, unknown>).effort).toBeUndefined();
-    expect((opus.output_config as Record<string, unknown>).effort).toBe("low");
-    // The schema travels either way — the authorship rule is not model-dependent.
-    for (const params of [haiku, opus]) {
-      expect((params.output_config as Record<string, unknown>).format).toBeTruthy();
-    }
-  });
-
-  it("sends each generation's own thinking shape when EXTRACTION_THINKING is on", async () => {
-    vi.stubEnv("EXTRACTION_THINKING", "on");
-    const run = async (model: string) => {
-      const { client, calls } = stub(output());
-      await extractFromTranscript(
-        { transcript: TRANSCRIPT, callNumber: 1 },
-        { client, model, blocks: [ONE_BLOCK] },
-      );
-      return calls[0];
-    };
-
-    expect((await run("claude-haiku-4-5")).thinking).toEqual({
-      type: "enabled",
-      budget_tokens: 4000,
-    });
-    expect((await run("claude-opus-5")).thinking).toEqual({ type: "adaptive" });
   });
 });
 

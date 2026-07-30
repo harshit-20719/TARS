@@ -17,18 +17,23 @@
  *
  * **The client is injected.** Tests pass a stub, so the suite never needs an API
  * key and never reaches the network.
+ *
+ * What is *not* here any more is Anthropic. Every provider-shaped request field
+ * — model ids, thinking shapes, token ceilings, the SDK's error vocabulary —
+ * lives in lib/extraction/providers/anthropic.ts behind the port declared in
+ * types.ts (KTD4). This module fans out, verifies, and aggregates; it does not
+ * know what a stop reason is.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import type * as z from "zod";
 import { RUBRICS, type Rubric } from "@/framework";
 import { outputSchemaFor } from "./schema";
 /**
  * The error and the draft shapes live in types.ts now, beside the provider
  * port, so lib/actions.ts can recognise an extraction failure without this
- * module — and its Anthropic import — entering the action's module graph.
- * Re-exported here so existing importers keep working while the callers
- * migrate; new code should import from lib/extraction/types.
+ * module entering the action's module graph. Re-exported here so existing
+ * importers keep working while the callers migrate; new code should import
+ * from lib/extraction/types.
  */
 import {
   ExtractionError,
@@ -36,101 +41,31 @@ import {
   type DraftObservation,
   type ExtractionFailureKind,
   type ExtractionOutput,
+  type ExtractionProvider,
 } from "./types";
+import {
+  BLOCK_TIMEOUT_MS,
+  createAnthropicProvider,
+  DEFAULT_EXTRACTION_MODEL,
+  type ExtractionClient,
+} from "./providers/anthropic";
 import { buildExtractionUserMessage, systemPromptFor } from "./prompt";
 
 export { ExtractionError };
 export type { DraftClaim, DraftObservation, ExtractionOutput };
 
 /**
- * Default model, resolving spec D6 in favour of Sonnet 5.
- *
- * Splitting extraction into one call per macro-dimension sends the transcript six
- * times, which multiplied the per-transcript cost on the Opus tier. Sonnet 5 is
- * what the plan recommended for this step all along (KTD4): the machine here
- * quotes, files, and tags — it never judges — and the block split narrowed the
- * hardest part of the job, since each call now chooses between six or seven rows
- * rather than forty-one, with a schema that makes a cross-block answer impossible.
- * What it gets wrong it also tends to flag: an unsure mapping reports itself and
- * waits for a person, so the exception queue absorbs the difference.
- *
- * `EXTRACTION_MODEL` still overrides this without a code change.
+ * The Anthropic-owned pieces, re-exported from their new home so existing
+ * importers (the health route, capture.ts, the tests) keep working. New code
+ * should import from lib/extraction/providers/anthropic directly.
  */
-export const DEFAULT_EXTRACTION_MODEL = "claude-sonnet-5";
-
-/**
- * How to ask a given model to think.
- *
- * The two knobs are not portable across model generations, and getting them
- * wrong is a 400 rather than a degradation — so EXTRACTION_MODEL cannot just be
- * pasted into the request. Claude 4.6 and later take `thinking: {adaptive}` and
- * an `effort` level; earlier models take a fixed `budget_tokens` and reject
- * `effort` outright. Haiku 4.5 is in the second group, which is exactly the
- * model someone reaches for to make this step cheaper.
- *
- * Returning the request fragment rather than a pair of flags keeps the branch in
- * one place: the call site spreads whatever this hands back.
- */
-export function thinkingConfigFor(model: string): Record<string, unknown> {
-  /**
-   * Read the generation out of the id rather than pattern-matching the whole
-   * string. A looser regex is easy to get wrong in the direction that matters:
-   * "claude-haiku-4-5" ends in "-5" and will happily match a rule meant for the
-   * 5 series, which is precisely the model this branch exists for.
-   */
-  const parsed = /^claude-(?:[a-z]+-)?(\d+)(?:-(\d+))?/.exec(model);
-  const major = parsed ? Number(parsed[1]) : 0;
-  const minor = parsed?.[2] !== undefined ? Number(parsed[2]) : 0;
-
-  // An id this does not recognise is far likelier to be newer than older, so the
-  // unknown case takes the modern shape.
-  const adaptive = !parsed || major >= 5 || (major === 4 && minor >= 6);
-
-  /**
-   * Thinking is off unless asked for, and that default was earned rather than
-   * assumed: with it on, five of the six blocks on a real forty-minute
-   * transcript did not finish inside thirty seconds.
-   *
-   * Two reasons it costs more here than it looks. `max_tokens` caps thinking and
-   * output *together*, so on a block that legitimately produces a few thousand
-   * tokens of quotes the thinking is competing with the drafts for the same
-   * budget. And the work itself does not need it: the prompt asks the model to
-   * quote exactly, file the quote against one of six or seven rows, and tag
-   * where it came from. That is a careful-reading task, not a reasoning one.
-   *
-   * What makes it safe is that none of the guards depend on it. A paraphrase is
-   * dropped by the verbatim check whether the model thought about it or not, the
-   * schema constrains the shape, and a mapping the model is unsure of reports
-   * itself and goes to a person. So the failure modes thinking would protect
-   * against are already caught downstream.
-   *
-   * EXTRACTION_THINKING=on restores it, per generation, without a code change —
-   * worth trying on short transcripts if the filing quality needs it.
-   */
-  const wantThinking = process.env.EXTRACTION_THINKING?.trim() === "on";
-
-  if (adaptive) {
-    /**
-     * Effort still applies with thinking off — it governs the model's overall
-     * token spend, not only how deeply it thinks. "low" for the same reason as
-     * above; EXTRACTION_EFFORT raises it.
-     */
-    const effort = process.env.EXTRACTION_EFFORT?.trim() || "low";
-    return {
-      thinking: wantThinking ? { type: "adaptive" } : { type: "disabled" },
-      effort,
-    };
-  }
-  /**
-   * Pre-4.6, and still no `effort` — Haiku 4.5 rejects it outright, which is the
-   * whole reason this function exists. A fixed budget must be strictly less than
-   * max_tokens; 4000 is enough to work through a transcript without eating the
-   * budget the drafts themselves need.
-   */
-  return {
-    thinking: wantThinking ? { type: "enabled", budget_tokens: 4000 } : { type: "disabled" },
-  };
-}
+export {
+  BLOCK_RETRIES,
+  BLOCK_TIMEOUT_MS,
+  DEFAULT_EXTRACTION_MODEL,
+  thinkingConfigFor,
+} from "./providers/anthropic";
+export type { ExtractionClient } from "./providers/anthropic";
 
 /**
  * The reduced form of a provider failure: what happened, said in no provider's
@@ -161,8 +96,8 @@ export type ApiFailureStatus = number | null | "timeout" | "filing";
  * parameter or the billing state, which is the part worth reading, and it never
  * contains the key. The function takes a status rather than the thrown error so
  * it stays provider-neutral: classifying an SDK's exception into a status is
- * the adapter's job (classifyApiFailure below, for the Anthropic SDK), and the
- * wording here belongs to no SDK at all.
+ * the adapter's job (classifyApiFailure in providers/anthropic.ts, for the
+ * Anthropic SDK), and the wording here belongs to no SDK at all.
  */
 export function describeApiFailure(
   status: ApiFailureStatus,
@@ -228,151 +163,6 @@ export function describeApiFailure(
   return `could not reach the API, so no drafts were written.${raw}`;
 }
 
-/**
- * Which class of failure a status belongs to (KTD5). The status is the one fact
- * that survives translation to a readable message, so the kind is derived from
- * it here rather than re-inferred later by parsing the message back.
- */
-function failureKindFor(status: ApiFailureStatus): ExtractionFailureKind {
-  if (status === "filing") return "filing";
-  // A rate limit, an outage, a timeout, and a dropped connection all clear on
-  // their own; the message for each already says "try again".
-  if (status === "timeout" || status === null || status === 429) return "retryable";
-  if (status >= 500) return "retryable";
-  // Every remaining status is a request that will fail the same way next time.
-  return "terminal";
-}
-
-/**
- * Read an Anthropic SDK exception into the neutral status vocabulary.
- *
- * This is the one place the SDK's error shape is understood, and it moves out
- * with the request build in U2. Everything is read structurally — `name` as a
- * string, never `instanceof` — so a plain-object stub shaped like the real
- * thing behaves like the real thing, the same convention isTimeout follows in
- * lib/fireflies/client.ts.
- */
-function classifyApiFailure(e: unknown): {
-  status: ApiFailureStatus;
-  messages: string[];
-  requestID?: string;
-} {
-  /**
-   * A schema violation first, because it is the failure with no status at all:
-   * the SDK validates the model's answer inside the awaited call and throws the
-   * Zod error raw. Recognised by its `issues` array rather than by class for
-   * the same stub-friendliness as everything else here. Only the issue paths
-   * travel — the failing value is the model's reading of a founder call.
-   */
-  const issues = (e as { issues?: unknown })?.issues;
-  const name = (e as { name?: unknown })?.name;
-  if (name === "ZodError" || Array.isArray(issues)) {
-    const where = (Array.isArray(issues) ? issues : [])
-      .slice(0, 3)
-      .map((i) => {
-        const issue = i as { path?: (string | number)[]; message?: string };
-        return `${issue.path?.join(".") || "response"}: ${issue.message ?? "did not match"}`;
-      });
-    return { status: "filing", messages: where };
-  }
-
-  const err = e as {
-    status?: number;
-    requestID?: string;
-    error?: { error?: { message?: string } };
-    message?: string;
-  };
-  if (typeof err?.status === "number") {
-    const detail = err.error?.error?.message;
-    return {
-      status: err.status,
-      messages: detail ? [detail] : [],
-      requestID: err.requestID,
-    };
-  }
-  if (name === "APIConnectionTimeoutError" || /timed out/i.test(err?.message ?? "")) {
-    return { status: "timeout", messages: [] };
-  }
-  return { status: null, messages: err?.message ? [err.message] : [] };
-}
-
-/**
- * The slice of the Anthropic client this service uses. Narrow on purpose so a
- * test stub is a few lines rather than a mock of the whole SDK.
- */
-/**
- * How long one block's call may take before it is abandoned.
- *
- * The SDK's default is about ten minutes, against a function that is killed at
- * sixty seconds. That default turned one slow block into a total loss: the whole
- * function died, so the five blocks that had already answered were never written —
- * defeating the point of running them concurrently and keeping partial results. A
- * bounded wait makes a slow block behave like any other failed block.
- *
- * Sized so the whole run fits the free tier's ceiling rather than needing a paid
- * one. The blocks are concurrent, so the extraction phase is bounded by this single
- * number, not by six of them; adding the database phase's own ceiling
- * (see runExtractionForCall) leaves headroom under sixty seconds.
- *
- * That last paragraph was false until BLOCK_RETRIES existed, and the way it was
- * false is worth keeping written down: this option bounds one *attempt*, not one
- * block. See BLOCK_RETRIES.
- *
- * Forty rather than thirty because thirty was not enough: on a real forty-minute
- * transcript five of the six blocks did not finish in time. Forty plus the write
- * phase's ten is fifty, which leaves a cold start and the session lookup room
- * inside sixty.
- *
- * Note what will *not* buy a block more time, because it is the obvious next
- * idea: splitting the six blocks across six requests. The blocks already run
- * concurrently, so they share wall clock rather than dividing a budget — one
- * block in its own function still cannot exceed the same sixty-second ceiling
- * minus the same write phase. The levers that do work are this number and the
- * model's own speed (see thinkingConfigFor, EXTRACTION_MODEL).
- */
-export const BLOCK_TIMEOUT_MS = 40_000;
-
-/**
- * No retries, which is the only setting that makes BLOCK_TIMEOUT_MS mean what
- * the comment above says it means.
- *
- * The SDK retries twice by default, and a timeout is one of the things it
- * retries — so `{ timeout: 30_000 }` alone bounds an attempt at thirty seconds
- * and a block at ninety. Six concurrent blocks are still bounded by one block,
- * but one block outran the sixty-second function ceiling on its own. The
- * function was killed rather than returning, which is the failure with no error
- * object and no message: the browser gets "an unexpected response was received
- * from the server" and there is nothing to read.
- *
- * Retrying here was self-defeating rather than merely expensive. The whole point
- * of the concurrent fan-out is that a bad block costs one block: the run reports
- * it in `failedBlocks`, writes the rest, and invites a re-run. A retry that
- * outruns the ceiling turns that partial success into a total loss — including
- * the blocks that already answered. Failing a block at thirty seconds and saying
- * which one is strictly better than silently losing all six.
- */
-export const BLOCK_RETRIES = 0;
-
-export interface ExtractionClient {
-  messages: {
-    parse(
-      params: Record<string, unknown>,
-      options?: { timeout?: number; maxRetries?: number },
-    ): Promise<{
-      /**
-       * A block's output, so no `rubricKey` — the caller knows which block it
-       * asked, and adds it. Asking the model for a value already known would only
-       * create a way for it to disagree with itself.
-       */
-      parsed_output: Omit<ExtractionOutput, "observations"> & {
-        observations: Omit<DraftObservation, "rubricKey">[];
-      } | null;
-      stop_reason?: string | null;
-      stop_details?: { category?: string | null; explanation?: string | null } | null;
-    }>;
-  };
-}
-
 export interface ExtractionInput {
   transcript: string;
   callNumber: number;
@@ -433,18 +223,6 @@ export function isVerbatim(transcript: string, quote: string): boolean {
 
 // ----------------------------------------------------------------- the call
 
-function resolveClient(injected?: ExtractionClient): ExtractionClient {
-  if (injected) return injected;
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new ExtractionError(
-      "ANTHROPIC_API_KEY is not set — extraction cannot run. See docs/runbooks/deploy-vercel.md.",
-      "terminal",
-    );
-  }
-  // Constructed lazily so importing this module never requires a key.
-  return new Anthropic() as unknown as ExtractionClient;
-}
-
 /**
  * Draft observations and claims from one transcript, one macro-dimension at a time.
  *
@@ -478,14 +256,21 @@ export async function extractFromTranscript(
     throw new ExtractionError("cannot extract from an empty transcript", "terminal");
   }
 
-  const client = resolveClient(deps.client);
-  // An empty EXTRACTION_MODEL should fall through to the default, hence || here.
-  const model = deps.model ?? (process.env.EXTRACTION_MODEL || DEFAULT_EXTRACTION_MODEL);
+  /**
+   * The default provider is the Anthropic adapter, constructed per run so no
+   * credential is read at import time. `deps.client` keeps the old seam: tests
+   * stub at the SDK slice and every request still flows through the adapter's
+   * request build, so what a stub records is what the wire would carry.
+   */
+  const provider: ExtractionProvider = createAnthropicProvider({
+    client: deps.client,
+    model: deps.model,
+  });
   const blocks = deps.blocks ?? RUBRICS;
   const userMessage = buildExtractionUserMessage(input);
 
   const settled = await Promise.allSettled(
-    blocks.map((rubric) => extractBlock(client, model, rubric, userMessage)),
+    blocks.map((rubric) => extractBlock(provider, rubric, userMessage)),
   );
 
   const merged: ExtractionOutput = { observations: [], claims: [] };
@@ -533,82 +318,34 @@ export async function extractFromTranscript(
 
 /**
  * One macro-dimension's pass. Rejects with an ExtractionError; the caller decides
- * whether one block failing is fatal.
+ * whether one block failing is fatal. The provider does the reading; this frame
+ * renders the block's prompt, stamps the rubric key on what comes back, and
+ * prefixes the block's label onto any failure so an aggregated message still
+ * names which block it was.
  */
 async function extractBlock(
-  client: ExtractionClient,
-  model: string,
+  provider: ExtractionProvider,
   rubric: Rubric,
   userMessage: string,
 ): Promise<ExtractionOutput> {
-  const { thinking, effort } = thinkingConfigFor(model);
-  // Built outside the try so a schema problem here stays a programmer error
-  // rather than being reported as an API failure.
-  const params = {
-    /**
-     * Not an Anthropic field, and carried on purpose (KTD7): the request names
-     * the block it reads, so a test stub routes its answers on the key rather
-     * than reverse-engineering the block from a generated prompt string — and
-     * an unrouted request can throw instead of answering with a default. U2
-     * moves this bag into a neutral request type; the key is here first so the
-     * stubs can move off prompt-matching now.
-     */
-    rubricKey: rubric.key,
-    model,
-    /**
-     * Sized for one block rather than for the whole rubric. Seven rows with
-     * several quotes each is a few thousand tokens; 8000 leaves room without
-     * inviting a generation long enough to threaten the time limit. Still above
-     * the pre-4.6 thinking budget it has to exceed, and under Haiku 4.5's ceiling.
-     */
-    max_tokens: 8000,
-    system: systemPromptFor(rubric),
-    thinking,
-    output_config: {
-      // Omitted entirely on pre-4.6 models, which reject it.
-      ...(effort ? { effort } : {}),
-      format: zodOutputFormat(outputSchemaFor(rubric)),
-    },
-    messages: [{ role: "user", content: userMessage }],
-  };
-
-  let response: Awaited<ReturnType<ExtractionClient["messages"]["parse"]>>;
+  let parsed: z.infer<ReturnType<typeof outputSchemaFor>>;
   try {
-    response = await client.messages.parse(params, {
-      timeout: BLOCK_TIMEOUT_MS,
-      maxRetries: BLOCK_RETRIES,
+    parsed = await provider.extractBlock({
+      rubricKey: rubric.key,
+      system: systemPromptFor(rubric),
+      user: userMessage,
+      schema: outputSchemaFor(rubric),
+      timeoutMs: BLOCK_TIMEOUT_MS,
     });
   } catch (e) {
-    // The one statement in this block is the API call, so everything from it is
-    // an extraction failure — reported as a value the form can render instead of
-    // escaping as an unhandled error. Classified first, so the message and the
-    // machine-readable kind are derived from the same status and cannot disagree.
-    const { status, messages, requestID } = classifyApiFailure(e);
+    // The label prefix belongs to the fan-out, not the adapter: the adapter
+    // reads one block and does not know its human name. The kind carries.
+    if (e instanceof ExtractionError) {
+      throw new ExtractionError(`${rubric.label}: ${e.message}`, e.kind);
+    }
     throw new ExtractionError(
-      `${rubric.label}: ${describeApiFailure(status, messages, requestID)}`,
-      failureKindFor(status),
-    );
-  }
-
-  // Check the refusal before reading content: on a refusal the content is empty
-  // or partial, and reading it as a result would silently persist nothing while
-  // reporting success.
-  if (response.stop_reason === "refusal") {
-    const category = response.stop_details?.category ?? "unspecified";
-    // Terminal: the model is declining this transcript, not having a bad minute.
-    throw new ExtractionError(
-      `${rubric.label}: the model declined to process this transcript (${category})`,
-      "terminal",
-    );
-  }
-
-  const parsed = response.parsed_output;
-  if (!parsed) {
-    // Retryable: a generation that produced nothing usable is a fluke of this
-    // run, and re-running the block is the remedy the message implies.
-    throw new ExtractionError(
-      `${rubric.label}: the model returned no parseable output`,
-      "retryable",
+      `${rubric.label}: ${String((e as Error)?.message ?? e)}`,
+      "unknown",
     );
   }
 
