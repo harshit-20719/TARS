@@ -43,15 +43,41 @@ function rowReference(s: SubDimension): string {
   return [`  ${s.key} — ${s.label}`, `      what it tests: ${s.whatItTests}`, ...anchors].join("\n");
 }
 
+/** What an admin may shape about one block's reading (KTD12). */
+export interface PromptTuning {
+  persona?: string;
+  guidance?: string;
+}
+
 /**
  * The system prompt for one macro-dimension.
  *
  * The transcript is deliberately not in here — it goes in the user message, so
- * this block prompt is identical for every deal and every call.
+ * this block prompt is identical for every deal and every call. That stays
+ * true with tuning: a persona applies to every deal alike.
+ *
+ * What tuning changes is the other property this file used to hold — that the
+ * prompt was wholly derived from committed config and so could not drift from
+ * framework/rubrics.ts. The rows still are: the persona sits ahead of the
+ * identity line and the guidance ahead of the prohibitions, and neither can
+ * reach the generated rows or the two parts of the job. The trade is
+ * deliberate, and it is why every observation records the tuning version it
+ * was drafted under (U12) — the prompt is no longer reconstructible from the
+ * commit alone, so the stamp is what keeps a filing traceable to its words.
+ *
+ * With no tuning, the output is byte-identical to what it was before tuning
+ * existed. A deployment that never opens the admin page cannot tell.
  */
-export function systemPromptFor(rubric: Rubric): string {
+export function systemPromptFor(rubric: Rubric, tuning: PromptTuning = {}): string {
   const n = rubric.subs.length;
-  return `You extract evidence from venture-capital founder call transcripts for Biome's Idea-to-Enterprise framework, at the Conviction (L1) layer.
+  const persona = tuning.persona?.trim();
+  const guidance = tuning.guidance?.trim();
+
+  // Ahead of the identity line: a persona is who is reading, so it has to be
+  // established before the sentence that says what they are reading.
+  const preamble = persona ? `${persona}\n\n` : "";
+
+  return `${preamble}You extract evidence from venture-capital founder call transcripts for Biome's Idea-to-Enterprise framework, at the Conviction (L1) layer.
 
 You are working on ONE block of the framework: **${rubric.label}**. It has ${n} rows, listed at the end. Ignore anything in the transcript that does not speak to one of these ${n} rows — separate passes cover the rest of the framework.
 
@@ -81,7 +107,7 @@ Your job has exactly two parts, and stops there.
        machine-inferred — you inferred it from what was said; the founder did not assert it directly
      The distinction matters: a claim the founder volunteered carries different weight from one they merely agreed with, and that difference is lost if you tag by feel. When unsure between volunteered and confirmed-after-framing, read who introduced the idea first.
 
-WHAT YOU MUST NOT DO.
+${guidance ? `WHAT TO WATCH FOR IN THIS BLOCK.\n\n${guidance}\n\n` : ""}WHAT YOU MUST NOT DO.
 
 You do not score, rate, rank, or grade the founder or the company. You do not decide whether evidence is strong or weak, whether a row is met, or whether the deal is good. You assign no numbers on any row and offer no assessment. A person authors every score in this framework, reading the evidence you surfaced; your drafts are the input to that judgment, never a substitute for it. Do not editorialise in the claim text or the mapping note either — record what was said and where you filed it, not what you make of it.
 

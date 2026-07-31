@@ -255,9 +255,30 @@ export function isVerbatim(transcript: string, quote: string): boolean {
  * wrote real evidence and throwing it away would waste both the tokens and the
  * PM's wait. The failure is reported alongside the results instead.
  */
+/**
+ * One block's tuning, as the fan-out hands it down (KTD12, KTD14).
+ *
+ * A snapshot value, not a lookup: the caller reads all six rows once before
+ * the fan-out and passes what it read. Six blocks reading their own row across
+ * a forty-second window could straddle an admin's save and produce one call's
+ * observations under two different prompts — undetectable afterwards, since
+ * every row would carry the same stamp.
+ */
+export interface BlockTuning {
+  persona?: string;
+  guidance?: string;
+  temperature?: number;
+}
+
 export async function extractFromTranscript(
   input: ExtractionInput,
-  deps: { client?: ExtractionClient; model?: string; blocks?: readonly Rubric[] } = {},
+  deps: {
+    client?: ExtractionClient;
+    model?: string;
+    blocks?: readonly Rubric[];
+    /** Keyed by rubric key. Absent entries read under the defaults. */
+    tuning?: Readonly<Record<string, BlockTuning>>;
+  } = {},
 ): Promise<ExtractionResult> {
   if (!input.transcript.trim()) {
     throw new ExtractionError("cannot extract from an empty transcript", "terminal");
@@ -279,7 +300,7 @@ export async function extractFromTranscript(
   const userMessage = buildExtractionUserMessage(input);
 
   const settled = await Promise.allSettled(
-    blocks.map((rubric) => extractBlock(provider, rubric, userMessage)),
+    blocks.map((rubric) => extractBlock(provider, rubric, userMessage, deps.tuning?.[rubric.key])),
   );
 
   const merged: ExtractionOutput = { observations: [], claims: [] };
@@ -360,15 +381,17 @@ async function extractBlock(
   provider: ExtractionProvider,
   rubric: Rubric,
   userMessage: string,
+  tuning: BlockTuning | undefined,
 ): Promise<ExtractionOutput> {
   let parsed: z.infer<ReturnType<typeof outputSchemaFor>>;
   try {
     parsed = await provider.extractBlock({
       rubricKey: rubric.key,
-      system: systemPromptFor(rubric),
+      system: systemPromptFor(rubric, tuning ?? {}),
       user: userMessage,
       schema: outputSchemaFor(rubric),
       timeoutMs: BLOCK_TIMEOUT_MS,
+      ...(tuning?.temperature !== undefined ? { temperature: tuning.temperature } : {}),
     });
   } catch (e) {
     // The label prefix belongs to the fan-out, not the adapter: the adapter

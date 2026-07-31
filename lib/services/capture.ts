@@ -36,6 +36,7 @@ import {
   type ExtractionClient,
   type ExtractionResult,
 } from "@/lib/extraction/extract";
+import { listExtractionConfigs } from "@/lib/repo/extractionConfig";
 /**
  * The dedupe module owns "when are two filings the same span, and which one
  * survives" (KTD10). The in-memory pass over a single run's drafts lives
@@ -480,6 +481,26 @@ export async function runExtractionForCall(
   }
 
   try {
+    /**
+     * One read of all six rubrics' tuning, before the fan-out (KTD14).
+     *
+     * Deliberately not read per block: six reads spread across a forty-second
+     * window can straddle an admin's save, and the result would be one call's
+     * observations drafted under two different prompts while every row carried
+     * the same version stamp — a difference nobody could later detect. One
+     * snapshot, one version, stamped on everything this run writes.
+     */
+    const configs = await listExtractionConfigs();
+    const tuning = Object.fromEntries(
+      configs.map((c) => [c.rubricKey, { persona: c.persona, guidance: c.guidance, temperature: c.temperature }]),
+    );
+    /**
+     * The version to stamp. Null when nothing is tuned at all, which is what
+     * makes a stamp mean something: a stamped row points at words somebody
+     * saved, and an unstamped one says the defaults were in force.
+     */
+    const configVersions = Object.fromEntries(configs.map((c) => [c.rubricKey, c.version]));
+
     const result = await extractFromTranscript(
       {
         transcript: call.transcript,
@@ -487,7 +508,7 @@ export async function runExtractionForCall(
         company: call.deal.company,
         callLabel: call.label,
       },
-      { client: options.client, model: options.model },
+      { client: options.client, model: options.model, tuning },
     );
 
     /**
@@ -680,6 +701,13 @@ export async function runExtractionForCall(
             status: "accepted" as const,
             confidence: o.confidence,
             mappingNote: o.mappingNote,
+            /**
+             * Which tuning drafted this (KTD14). Null where that block is
+             * untuned, so a stamp always names words somebody saved — the
+             * stamp is what keeps a filing traceable now that the prompt is no
+             * longer reconstructible from the commit alone.
+             */
+            configVersion: configVersions[o.rubricKey] ?? null,
             layer: "L1" as const,
           })),
         });
@@ -781,8 +809,9 @@ export async function runExtractionForCall(
          *
          * `mergedSpans` is the block's losing filings from the in-memory pass
          * plus the cross-run collisions above, attributed to the in-run block
-         * (see the contest for why). `configVersion` stays null until
-         * per-rubric config exists (U10).
+         * (see the contest for why). `configVersion` records the tuning this
+         * run read under, so the admin page's drop count can say which words
+         * produced it (R20).
          */
         const attempted = [
           ...result.succeededBlocks,
@@ -801,6 +830,7 @@ export async function runExtractionForCall(
               droppedClaims: result.droppedByBlock[rubricKey]?.claims ?? 0,
               mergedSpans:
                 (result.mergedByBlock[rubricKey] ?? 0) + (crossMergedByBlock[rubricKey] ?? 0),
+              configVersion: configVersions[rubricKey] ?? null,
             })),
             ...result.failedBlocks.map((f) => ({
               callId,
@@ -810,6 +840,7 @@ export async function runExtractionForCall(
                   ? ("FAILED_TERMINAL" as const)
                   : ("FAILED_RETRYABLE" as const),
               reason: f.reason,
+              configVersion: configVersions[f.rubricKey] ?? null,
             })),
           ],
         });
