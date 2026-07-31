@@ -609,16 +609,16 @@ describe("API failures are reported, not thrown past the action layer", () => {
     expect(zodViolation.success).toBe(false);
     const thrown = (zodViolation as { error?: unknown }).error;
 
-    const r = extractFromTranscript(
+    // Read off the failed block rather than a rejection: a subset request
+    // reports its failures as results, so the caller sequencing six of them
+    // sees all six outcomes instead of the first one that threw.
+    const r = await extractFromTranscript(
       { transcript: TRANSCRIPT, callNumber: 1 },
-      { client: failing(thrown), blocks: [ONE_BLOCK] },
+      { client: failing(thrown), blocks: [ONE_BLOCK], retryBackoffMs: NO_BACKOFF },
     );
-    await expect(r).rejects.toThrow(ExtractionError);
+    expect(r.succeededBlocks).toEqual([]);
+    const message = r.failedBlocks[0].reason;
 
-    const message = await r.then(
-      () => "",
-      (e: Error) => e.message,
-    );
     expect(message).not.toMatch(/reach the API/);
     expect(message).not.toMatch(/network/i);
     // It names the filing problem instead.
@@ -631,14 +631,13 @@ describe("API failures are reported, not thrown past the action layer", () => {
    * the fan-out, because the aggregate throw is what lib/actions.ts sees.
    */
   it("marks a rate limit retryable and a bad key terminal, without message-parsing", async () => {
-    const kindOf = async (thrown: unknown) =>
-      extractFromTranscript(
+    const kindOf = async (thrown: unknown) => {
+      const r = await extractFromTranscript(
         { transcript: TRANSCRIPT, callNumber: 1 },
         { client: failing(thrown), blocks: [ONE_BLOCK], retryBackoffMs: NO_BACKOFF },
-      ).then(
-        () => "clean",
-        (e: ExtractionError) => e.kind,
       );
+      return r.failedBlocks[0]?.kind ?? "clean";
+    };
 
     expect(await kindOf({ status: 429, error: {} })).toBe("retryable");
     expect(await kindOf({ status: 529, error: {} })).toBe("retryable");
@@ -762,11 +761,11 @@ describe("API failures are reported, not thrown past the action layer", () => {
       },
     };
 
-    const r = extractFromTranscript(
+    const r = await extractFromTranscript(
       { transcript: TRANSCRIPT, callNumber: 1 },
       { client: alwaysSheds, blocks: [ONE_BLOCK], retryBackoffMs: NO_BACKOFF },
     );
-    await expect(r).rejects.toThrow(/returned 503/);
+    expect(r.failedBlocks[0].reason).toMatch(/returned 503/);
     expect(attempts).toBe(BLOCK_ATTEMPTS);
   });
 

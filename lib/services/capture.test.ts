@@ -574,6 +574,64 @@ describe("extraction persistence", () => {
       );
     });
 
+    /**
+     * The regression that made a failed block invisible.
+     *
+     * A one-block request whose block fails satisfies "every block failed",
+     * which the orchestrator treated as a failed run and threw on — before the
+     * caller had written anything. So the block run row was never created: the
+     * extraction quality view had nothing to show, a refresh showed nothing,
+     * and the sequencing caller read the throw as "stop", abandoning the five
+     * blocks after it. A block that fails must still leave a record saying so.
+     */
+    it("records a failed one-block request instead of throwing it away", async () => {
+      const { callId } = await seedCall("Solo Failure");
+      const target = RUBRICS[0];
+
+      const rateLimited: ExtractionClient = {
+        messages: {
+          parse: async () => {
+            throw Object.assign(new Error("nope"), { status: 429 });
+          },
+        },
+      };
+
+      const summary = await runExtractionForCall(pm, callId, {
+        client: rateLimited,
+        blocks: [target.key],
+      });
+
+      expect(summary.succeededBlocks).toEqual([]);
+      expect(summary.failedBlocks.map((f) => f.rubricKey)).toEqual([target.key]);
+
+      // The record is the point: durable, and legible after a refresh.
+      const rows = await db.extractionBlockRun.findMany({ where: { callId } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].rubricKey).toBe(target.key);
+      expect(rows[0].outcome).toBe("FAILED_RETRYABLE");
+      expect(rows[0].reason).toMatch(/rate limited/);
+      expect((await db.call.findUniqueOrThrow({ where: { id: callId } })).extracted).toBe(false);
+    });
+
+    /**
+     * The whole-run case keeps its old behaviour: nothing read across all six
+     * blocks is a failed run, not six partial ones, and it still throws.
+     */
+    it("still throws when a whole six-block run reads nothing", async () => {
+      const { callId } = await seedCall("Total Failure");
+      const everythingFails: ExtractionClient = {
+        messages: {
+          parse: async () => {
+            throw Object.assign(new Error("nope"), { status: 401 });
+          },
+        },
+      };
+
+      await expect(
+        runExtractionForCall(pm, callId, { client: everythingFails }),
+      ).rejects.toThrow(/API key is not valid/);
+    });
+
     it("refuses an unknown block by name, before anything is spent", async () => {
       const { callId } = await seedCall("Bad Block");
       let asked = false;

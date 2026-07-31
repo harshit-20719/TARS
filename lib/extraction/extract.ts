@@ -421,13 +421,28 @@ export async function extractFromTranscript(
     failedKinds.push(kind);
   });
 
-  // Every block failing is not a partial result, it is a failed run. Usually one
-  // cause (a bad key, no credit); when the causes differ, say all of them rather
-  // than picking whichever settled first. The kind survives the aggregation for
-  // the same reason the messages do: a caller deciding whether a retry is worth
-  // offering must not have to parse the sentence to find out — but only when the
-  // blocks agree, because a mixed run has no one honest class.
-  if (succeededBlocks.length === 0) {
+  /**
+   * Every block failing is not a partial result, it is a failed run — but only
+   * when "every block" means the whole framework.
+   *
+   * The rule was written when a run was always all six blocks at once, so
+   * "nothing read" could only mean the run itself had failed: one cause, one
+   * error, nothing worth persisting. A caller reading one block at a time
+   * breaks that equivalence. There, a single block failing satisfies the same
+   * condition while being an ordinary partial run of the call — and throwing
+   * discarded the very thing the record needs, because the block run rows are
+   * written by the caller *after* this returns. So a failed block left no
+   * trace: nothing on the extraction quality view, nothing after a refresh,
+   * exactly the hole KTD16 exists to close.
+   *
+   * A subset request therefore returns its failures as results and lets the
+   * caller aggregate. Nothing is lost by it: `failedBlocks` already carries
+   * each block's reason and kind, which is what the aggregation below flattens
+   * anyway, and a caller sequencing six requests can see all six outcomes
+   * rather than the first one that threw.
+   */
+  const wholeRun = blocks.length === RUBRICS.length;
+  if (succeededBlocks.length === 0 && wholeRun) {
     const reasons = [...new Set(failedBlocks.map((f) => f.reason))];
     const kinds = new Set(failedKinds);
     throw new ExtractionError(
