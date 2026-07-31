@@ -139,6 +139,15 @@ function toBlockRun(row: CallMetaRow["blockRuns"][number]): ExtractionBlockRun {
     droppedClaims: row.droppedClaims,
     mergedSpans: row.mergedSpans,
     ...(row.configVersion !== null ? { configVersion: row.configVersion } : {}),
+    /**
+     * Spread conditionally like the two above, and for the same reason: a null
+     * means the run predates the measurement, which must not render as a block
+     * that took no time. Note the shape of the bug this line fixes — the column,
+     * the select, the view type and the render all landed without it, and
+     * nothing failed, because an optional field missing from a mapper is not a
+     * type error. Anything added to this row needs its own assertion.
+     */
+    ...(row.durationMs !== null ? { durationMs: row.durationMs } : {}),
     ranAt: formatRecordDate(row.ranAt),
   };
 }

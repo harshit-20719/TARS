@@ -110,6 +110,39 @@ describe("per-block extraction outcomes on the record", () => {
     expect(call.blockRuns.find((r) => r.rubricKey === "pm")?.droppedQuotes).toBe(1);
   });
 
+  /**
+   * The duration is the number that says whether a block stopped on its time
+   * bound or finished comfortably inside it, and it reaches the page through
+   * this mapper. It shipped once without this line — column, select, view type
+   * and render all present, the mapper silently skipped — and nothing failed,
+   * because a field the view type marks optional is not a type error when it
+   * goes missing. Only an assertion catches that.
+   */
+  it("carries a block's duration through to the record, and omits it when unmeasured", async () => {
+    const call = (await getRecord("halten"))!.calls[0];
+    const target = call.blockRuns[0].rubricKey;
+    const where = { callId: call.id, rubricKey: target };
+    const readBack = async () =>
+      (await getRecord("halten"))!.calls[0].blockRuns.find((r) => r.rubricKey === target)!;
+
+    try {
+      // Both states are set explicitly rather than assumed. Reading the seed's
+      // starting value made this test depend on what a neighbour had left
+      // behind, which is exactly the failure it then produced.
+      await db.extractionBlockRun.updateMany({ where, data: { durationMs: null } });
+      // Unmeasured must be absent, never zero: a run that predates the
+      // measurement did not take no time.
+      expect(Object.keys(await readBack())).not.toContain("durationMs");
+
+      await db.extractionBlockRun.updateMany({ where, data: { durationMs: 12_345 } });
+      expect((await readBack()).durationMs).toBe(12_345);
+    } finally {
+      // Restored, because this row is shared seed state and the fixture
+      // round-trip above compares the whole record against the mock.
+      await db.extractionBlockRun.updateMany({ where, data: { durationMs: null } });
+    }
+  });
+
   it("gives a call that has never been extracted an empty run list, not a missing one", async () => {
     await db.deal.create({
       data: {
