@@ -90,6 +90,29 @@ costing PM attention. The signal to watch is on the Extraction quality reading
 and beside each rubric's controls on the admin tuning page: the count of quotes
 the verbatim check discarded.
 
+### Cutting over to Gemini
+
+In order, because two of these cannot be done afterwards:
+
+1. **Deploy this build first, changing no keys.** Extraction keeps running on
+   Anthropic exactly as before — the provider is decided by which key is
+   present, so a deploy on its own changes nothing about who answers.
+2. **Record the Anthropic baseline.** Run one extraction on a real
+   forty-minute transcript and note the dropped-quote count from the call
+   card. This is the number the fidelity gate compares against, and once the
+   Gemini key is in you can no longer measure it.
+3. **Clear `EXTRACTION_MODEL`** if it holds a Claude id (it is `claude-sonnet-5`
+   in the example env). The override applies to whichever provider is active
+   and nothing checks that the id belongs to it, so leaving it set makes every
+   Gemini block fail with a model-not-found.
+4. **Enable billing on the Google project** — see the note below. Do this
+   before the first run, not after.
+5. **Add `GOOGLE_API_KEY`, Production only.** That is the cutover; there is no
+   code or config change to accompany it. Confirm with `/api/health`, which
+   reports `extractionProvider`.
+6. **Check the first run** against step 2's number, and against zero terminal
+   blocks. Falling back is deleting the key again.
+
 > **Enable billing on the Google project before the first production run.**
 > This is a data-governance requirement, not a throughput one: free-tier AI
 > Studio prompts may be used for product improvement, and these prompts are
@@ -289,7 +312,7 @@ these. Set every one to **All Environments**:
 | `ADMIN_EMAILS` | your own address, e.g. `you@biome.in` | **Yes** — otherwise nobody is an admin |
 | `GOOGLE_API_KEY` | from https://aistudio.google.com → API keys | Optional — costs money, add later. Setting it makes Gemini the active provider |
 | `ANTHROPIC_API_KEY` | from https://console.anthropic.com → API Keys | Optional — the fallback provider; used only when no Gemini key is set |
-| `EXTRACTION_MODEL` | unset | Optional — overrides the active provider's pinned default |
+| `EXTRACTION_MODEL` | unset | Optional — overrides the active provider's pinned default. **Clear it when you switch providers**: a model id belongs to one provider, and nothing validates that it matches the active one |
 | `EXTRACTION_EFFORT` | `low` (the default) | Optional — raise to `medium`/`high` only if transcripts are short enough to finish inside 60s |
 
 One variable is the exception to "All Environments":
@@ -373,6 +396,7 @@ role wiring without any UI for it.
 | "Access blocked" from Google | Account isn't `@biome.in` | Sign in with a Biome account |
 | The call card shows "extraction off · set GOOGLE_API_KEY or ANTHROPIC_API_KEY" | Neither provider key is set for **Production** | Settings → Environment Variables → tick Production, redeploy. `/api/health` confirms with `extractionEnabled` and names the active provider |
 | Extraction runs on the wrong provider | Both keys are set — Gemini wins by design | Delete `GOOGLE_API_KEY` to fall back to Anthropic. `/api/health` reports `extractionProvider` |
+| Every block fails with "there is no model by that name" right after the cutover | `EXTRACTION_MODEL` still holds the old provider's model id | Clear it (or set a Gemini id). The override applies to whichever provider is active and is not checked against it |
 | A block reports it "cannot be read from this transcript" | A content refusal, which fails identically on every attempt | Do not re-run — it cannot succeed. Switch `EXTRACTION_MODEL`, or fall back to the other provider |
 | The import card shows "import off · no FIREFLIES_API_KEY" | The key is not set for **Production** | Settings → Environment Variables → add it, Production only, redeploy. `/api/health` confirms with `firefliesImportEnabled` |
 | Importing says the Fireflies key is not valid | The key was mistyped, or revoked in Fireflies | Re-copy it from Fireflies → Settings → Developer Settings, redeploy |
