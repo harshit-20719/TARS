@@ -26,10 +26,10 @@ Running the app costs nothing. One optional feature is metered.
 | Vercel Hobby | **Free** |
 | Prisma Postgres free tier | **Free** |
 | Google Cloud OAuth | **Free** — no billing account needed for a client ID |
-| **Anthropic API** — the extraction step only | **Metered.** No subscription; billed per token |
+| **The model API** — the extraction step only | **Metered.** No subscription; billed per token |
 
-**You can deploy and use the app with zero spend** by leaving
-`ANTHROPIC_API_KEY` unset. With no key, the transcript page simply does not offer
+**You can deploy and use the app with zero spend** by leaving both provider
+keys unset. With no key, the transcript page simply does not offer
 extraction — the buttons are absent rather than present-and-failing, and it says
 why. Transcripts still save, and you can score every row by hand. Add the key
 whenever you want the machine to draft observations, and the buttons appear on
@@ -53,15 +53,25 @@ The cost is reading the transcript six times instead of once. Input tokens are t
 cheap half of the bill, so a rough per-transcript cost — a 45-minute call, about
 15k tokens in per block and 1k out:
 
+> **These figures are unverified.** They come from third-party pricing
+> summaries, not from an invoice — the vendors' pricing pages were unreachable
+> from the environment this was written in. Check the first real invoice before
+> trusting the table, and correct it here.
+
 | Model | Per transcript | Per month at ~8 calls/week | Notes |
 |---|---|---|---|
-| `claude-sonnet-5` (default) | ~50¢ | **~$16** | Introductory pricing until 31 Aug 2026, then ~75¢ |
+| `gemini-2.5-flash-lite` (default) | ~1.5¢ | **~50¢** | Roughly a twentieth of the Anthropic default |
+| `gemini-2.5-flash` | ~10¢ | ~$3 | First escalation if mapping quality disappoints |
+| `claude-sonnet-5` | ~50¢ | ~$16 | The Anthropic default; introductory pricing until 31 Aug 2026 |
 | `claude-opus-5` | ~$1.50 | ~$48 | Strongest at picking the right row from anchor text |
-| `claude-haiku-4-5` | ~15¢ | ~$5 | Cheapest and fastest; weakest at the mapping |
 
-Set `EXTRACTION_MODEL` to switch; nothing else changes.
+Set `EXTRACTION_MODEL` to switch models; nothing else changes. Note that newer
+is not cheaper on Gemini — `gemini-3.6-flash` costs roughly seventeen times
+flash-lite. Never pin a floating alias like `gemini-flash-latest`: it re-points
+upstream and changes both price and behaviour without a commit.
 
-Sonnet 5 is the default, resolving spec D6 the way the plan recommended (KTD4).
+Gemini flash-lite is the default (spec D6, amended 2026-07-30 for cost and
+because Biome holds Gemini credits).
 The machine at this step quotes, files, and tags — it never judges — so the tier
 buys mapping accuracy rather than judgment. Quoting is the easy half and is
 guarded anyway: a quote that is not literally in the transcript is dropped before
@@ -72,14 +82,21 @@ merely agreed with the interviewer's framing.
 The block split narrowed that gap enough to make the cheaper tier the sensible
 default: each call now chooses between six or seven rows rather than forty-one,
 and the schema makes a cross-block answer impossible rather than merely unlikely.
-The model also reports its own uncertainty, so what it is unsure of waits for a
-person in the exception queue rather than filing itself.
+The model also reports its own uncertainty — an unsure filing still lands as
+evidence, but carries a visible mark on its row until a person confirms it.
 
-Opus is worth the switch if mis-mapping ever becomes the thing costing PM
-attention; Haiku is defensible if cost matters more than the last few percent.
+A heavier tier is worth the switch if mis-mapping ever becomes the thing
+costing PM attention. The signal to watch is on the Extraction quality reading
+and beside each rubric's controls on the admin tuning page: the count of quotes
+the verbatim check discarded.
 
-> Anthropic sells prepaid credits with a minimum purchase (usually \$5), so
-> that is the practical floor for trying extraction at all.
+> **Enable billing on the Google project before the first production run.**
+> This is a data-governance requirement, not a throughput one: free-tier AI
+> Studio prompts may be used for product improvement, and these prompts are
+> founder call transcripts naming real people and discussing financials. The
+> paid tier is what takes them out of that pool. Rate limits are the secondary
+> reason — tokens per minute binds rather than requests, at roughly 78k input
+> tokens per run, so the free tier allows about three concurrent runs.
 
 > **One caveat on Vercel Hobby:** its terms are written for personal,
 > non-commercial projects. An internal company POC sits in a grey area. Nothing
@@ -270,8 +287,9 @@ these. Set every one to **All Environments**:
 | `AUTH_GOOGLE_ID` | Client ID from stage 4 | **Yes** |
 | `AUTH_GOOGLE_SECRET` | Client secret from stage 4 | **Yes** |
 | `ADMIN_EMAILS` | your own address, e.g. `you@biome.in` | **Yes** — otherwise nobody is an admin |
-| `ANTHROPIC_API_KEY` | from https://console.anthropic.com → API Keys | Optional — costs money, add later |
-| `EXTRACTION_MODEL` | `claude-sonnet-5` | Optional — cheaper extraction |
+| `GOOGLE_API_KEY` | from https://aistudio.google.com → API keys | Optional — costs money, add later. Setting it makes Gemini the active provider |
+| `ANTHROPIC_API_KEY` | from https://console.anthropic.com → API Keys | Optional — the fallback provider; used only when no Gemini key is set |
+| `EXTRACTION_MODEL` | unset | Optional — overrides the active provider's pinned default |
 | `EXTRACTION_EFFORT` | `low` (the default) | Optional — raise to `medium`/`high` only if transcripts are short enough to finish inside 60s |
 
 One variable is the exception to "All Environments":
@@ -353,7 +371,9 @@ role wiring without any UI for it.
 | `redirect_uri_mismatch` from Google | The redirect URI doesn't match your domain | Stage 4b step 4 — it must be `https://<domain>/api/auth/callback/google` exactly |
 | Signed in, then immediately signed out | `AUTH_SECRET` missing or changed | Recheck 5b, redeploy |
 | "Access blocked" from Google | Account isn't `@biome.in` | Sign in with a Biome account |
-| The call card shows "extraction off · no ANTHROPIC_API_KEY" | The key is not set for **Production** | Settings → Environment Variables → tick Production, redeploy. `/api/health` confirms with `extractionEnabled` |
+| The call card shows "extraction off · set GOOGLE_API_KEY or ANTHROPIC_API_KEY" | Neither provider key is set for **Production** | Settings → Environment Variables → tick Production, redeploy. `/api/health` confirms with `extractionEnabled` and names the active provider |
+| Extraction runs on the wrong provider | Both keys are set — Gemini wins by design | Delete `GOOGLE_API_KEY` to fall back to Anthropic. `/api/health` reports `extractionProvider` |
+| A block reports it "cannot be read from this transcript" | A content refusal, which fails identically on every attempt | Do not re-run — it cannot succeed. Switch `EXTRACTION_MODEL`, or fall back to the other provider |
 | The import card shows "import off · no FIREFLIES_API_KEY" | The key is not set for **Production** | Settings → Environment Variables → add it, Production only, redeploy. `/api/health` confirms with `firefliesImportEnabled` |
 | Importing says the Fireflies key is not valid | The key was mistyped, or revoked in Fireflies | Re-copy it from Fireflies → Settings → Developer Settings, redeploy |
 | Extraction returns "An error occurred in the Server Components render" | The function was killed at its time limit before it could return, so there is no error to report | Long transcripts need time. `maxDuration` is 60s (the free-tier ceiling); if a transcript still outruns it, set `EXTRACTION_EFFORT=low` (the default) or split the call in two |
@@ -414,8 +434,9 @@ but as the team grows you may want to move migrations to a deliberate step.
 setup. Fine for now; worth separating before anyone tests destructive changes on
 a branch.
 
-**Rotating `AUTH_SECRET`** signs everybody out. Rotating `ANTHROPIC_API_KEY`
-affects only extraction.
+**Rotating `AUTH_SECRET`** signs everybody out. Rotating either provider key
+affects only extraction — and deleting `GOOGLE_API_KEY` is also how you fall
+back from Gemini to Anthropic.
 
 ---
 

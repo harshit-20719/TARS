@@ -2,7 +2,7 @@
 
 Working software for Biome's **Idea-to-Enterprise framework** — the **L1 (Conviction)** layer: the six-rubric **capture** flow and the **scorecard** it renders.
 
-A real Next.js app on Postgres, with Google SSO, role-gated authorship, and Claude-drafted evidence extraction. The front end was built mock-data-first against the record contract in `mock/types.ts`; the backend attached behind that contract without any change to the screens.
+A real Next.js app on Postgres, with Google SSO, role-gated authorship, and machine-drafted evidence extraction (Gemini by default, Anthropic selectable). The front end was built mock-data-first against the record contract in `mock/types.ts`; the backend attached behind that contract without any change to the screens.
 
 ## What it does
 
@@ -39,7 +39,7 @@ Open the **Halten** deal for a fully populated record (transcript → drafts →
 | `framework/` | The framework as static typed config: six rubrics + anchors, seven pillars + three tracks (lens + rooted set), founder types, the L1 verification cap. Referenced by key. |
 | `mock/` | `types.ts` — **the record contract** every layer speaks. `data.ts` is now the seed fixture source, not the runtime data source. |
 | `prisma/` | Schema, migrations (including CHECK constraints), and the fixture seed. |
-| `lib/` | `data.ts` (the seam the UI reads), `repo/` (Prisma → record types), `domain/` (the codec and the framework's invariants), `services/` (the write side), `extraction/` (Claude drafting), `actions.ts` (server actions), auth and session. Plus the original pure view logic: score bands, the peak/weakest-link driver, roll-up facts, per-step progress. |
+| `lib/` | `data.ts` (the seam the UI reads), `repo/` (Prisma → record types), `domain/` (the codec and the framework's invariants), `services/` (the write side), `extraction/` (provider-neutral drafting), `actions.ts` (server actions), auth and session. Plus the original pure view logic: score bands, the peak/weakest-link driver, roll-up facts, per-step progress. |
 | `components/` | Shared UI — top bar, sidebar stepper, slide card, review board, score pills, and the viz (`SlideProfile` dot-plot for the 0–10 slides, `CaptureGrid` fingerprint for the 1–5/hygiene scores). `authoring/` holds the write controls: the score picker, the slide form, the founder-type read, and the deal/transcript forms. |
 | `docs/` | The product spec (`docs/specs/…`) and the implementation plan (`docs/plans/…`). |
 

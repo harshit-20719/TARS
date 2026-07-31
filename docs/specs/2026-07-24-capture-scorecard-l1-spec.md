@@ -207,7 +207,7 @@ The build follows the companion implementation plan. It is nine ordered steps, e
 | 3 | Data model and storage for the deal record |
 | 4 | Deal and transcript management |
 | 5 | The extraction step (machine drafts observations and claims) |
-| 6 | Review of the machine's drafts |
+| 6 | Extraction quality — a reading of what the last run did, not a step (amended 2026-07-30; the drafts file themselves) |
 | 7 | The capture scoring screen and rules |
 | 8 | The judgment slide screen and rules |
 | 9 | The scorecard render and roll-up |

@@ -45,7 +45,16 @@ machine's job is to quote, not to characterize.
 
 **Mapping confidence** — how sure the machine is that a quote belongs to the
 row it filed it under. This rates the machine's own filing, never the founder.
-A confident mapping files itself; an unsure one goes to a person.
+Every mapping files itself as evidence; an unsure one carries a visible mark
+on the row until a person confirms it.
+
+**Confirming a filing** — a person saying a row is right without moving or
+rejecting it. Clears the unsure mark, and takes the filing out of the blast
+radius of a re-extraction, which nothing else on the capture page does.
+
+**Extraction tuning** — the persona, guidance note, and capped temperature an
+admin sets for each rubric. Shapes how the machine reads; never what it may
+write. Every observation records the tuning version it was drafted under.
 
 **Claim** — an assertion the founder makes about the world that a later layer
 will have to verify: a moat, a capability, a named buyer, a performance
