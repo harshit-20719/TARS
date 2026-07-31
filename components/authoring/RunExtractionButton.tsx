@@ -26,7 +26,11 @@ export function RunExtractionButton({
   type Summary = Extract<Awaited<ReturnType<typeof runExtractionAction>>, { ok: true }>["data"];
   const [summary, setSummary] = useState<Summary | null>(null);
   /** Which block the sequence is on, for the label. Null when not running. */
-  const [progress, setProgress] = useState<{ done: number; label: string } | null>(null);
+  const [progress, setProgress] = useState<{
+    done: number;
+    label: string;
+    total: number;
+  } | null>(null);
 
   /**
    * One request per macro-dimension, in sequence — still one press.
@@ -48,7 +52,8 @@ export function RunExtractionButton({
    * stays extracted throughout a re-run, since every block still holds a read
    * record from last time.
    */
-  async function run() {
+  async function run(only?: readonly { key: string; label: string }[]) {
+    const sequence = only ?? RUBRICS.map((r) => ({ key: r.key, label: r.label }));
     setSummary(null);
     const merged: Summary = {
       observations: 0,
@@ -60,8 +65,8 @@ export function RunExtractionButton({
       succeededBlocks: [],
     };
 
-    for (const [i, rubric] of RUBRICS.entries()) {
-      setProgress({ done: i, label: rubric.label });
+    for (const [i, rubric] of sequence.entries()) {
+      setProgress({ done: i, label: rubric.label, total: sequence.length });
       const r = await extract.run(callId, {
         force: alreadyExtracted,
         blocks: [rubric.key],
@@ -93,11 +98,11 @@ export function RunExtractionButton({
         type="button"
         className={alreadyExtracted ? "btn sm" : "btn sm primary"}
         disabled={extract.pending}
-        onClick={run}
+        onClick={() => run()}
       >
         <Icon name="play" />
         {progress
-          ? `Reading ${progress.done + 1} of ${RUBRICS.length}…`
+          ? `Reading ${progress.done + 1} of ${progress.total}…`
           : alreadyExtracted
             ? "Re-extract (replaces drafts)"
             : "Run extraction"}
@@ -140,6 +145,31 @@ export function RunExtractionButton({
                 </li>
               ))}
           </ul>
+          {/*
+            Re-read only what failed. Pressing the main button again would send
+            all six, spending five transcript reads to recover one block — and
+            re-reading a block that already succeeded replaces good evidence with
+            another draw from the same model for no reason. The blocks that
+            failed are exactly the ones with something to gain.
+          */}
+          <button
+            type="button"
+            className="btn sm"
+            disabled={extract.pending}
+            onClick={() =>
+              run(
+                summary.failedBlocks
+                  .filter((f) => f.kind !== "terminal")
+                  .map((f) => ({ key: f.rubricKey, label: f.label })),
+              )
+            }
+          >
+            <Icon name="play" />
+            Retry{" "}
+            {summary.failedBlocks.filter((f) => f.kind !== "terminal").length === 1
+              ? "this block"
+              : `these ${summary.failedBlocks.filter((f) => f.kind !== "terminal").length} blocks`}
+          </button>
         </div>
       )}
 

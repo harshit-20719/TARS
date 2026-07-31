@@ -27,7 +27,7 @@ type Summary = {
   droppedQuotes: string[];
   droppedClaims: number;
   mergedSpans: number;
-  failedBlocks: { label: string; reason: string; kind: string }[];
+  failedBlocks: { rubricKey: string; label: string; reason: string; kind: string }[];
   succeededBlocks: string[];
 };
 
@@ -123,7 +123,7 @@ describe("the run, spread across one request per block", () => {
         ok: true as const,
         data:
           i % 2 === 0
-            ? { ...nothing(), failedBlocks: [{ label: `Block ${i}`, reason: "timed out", kind: "retryable" }] }
+            ? { ...nothing(), failedBlocks: [{ rubricKey: RUBRICS[i].key, label: `Block ${i}`, reason: "timed out", kind: "retryable" }] }
             : nothing(),
       };
     });
@@ -144,6 +144,43 @@ describe("the run, spread across one request per block", () => {
    * — so the remaining blocks would be refused identically. Sending them would
    * spend five more round trips to collect the same answer.
    */
+  /**
+   * Recovering one block must cost one block. Pressing the main button again
+   * sends all six — five transcript reads spent to fix the one that failed, and
+   * five good blocks replaced by another draw from the same model for nothing.
+   */
+  it("retries only the blocks that failed", async () => {
+    const failed = RUBRICS[0];
+    let call = 0;
+    runExtractionAction.mockImplementation(async () => ({
+      ok: true as const,
+      data:
+        call++ === 0
+          ? {
+              ...nothing(),
+              failedBlocks: [
+                { rubricKey: failed.key, label: failed.label, reason: "timed out", kind: "retryable" },
+              ],
+            }
+          : nothing(),
+    }));
+    render(<RunExtractionButton callId="c1" alreadyExtracted={false} />);
+    await act(async () => {
+      screen.getByRole("button", { name: /run extraction/i }).click();
+    });
+    expect(runExtractionAction).toHaveBeenCalledTimes(RUBRICS.length);
+
+    runExtractionAction.mockClear();
+    await act(async () => {
+      screen.getByRole("button", { name: /retry this block/i }).click();
+    });
+
+    expect(runExtractionAction).toHaveBeenCalledTimes(1);
+    expect((runExtractionAction.mock.calls[0][1] as { blocks: string[] }).blocks).toEqual([
+      failed.key,
+    ]);
+  });
+
   it("stops the sequence when a request is refused outright", async () => {
     runExtractionAction.mockResolvedValue({ ok: false, error: "you cannot author this record" });
     render(<RunExtractionButton callId="c1" alreadyExtracted={false} />);
@@ -158,7 +195,7 @@ describe("the run, spread across one request per block", () => {
 describe("failed blocks, by what a re-run would actually do", () => {
   it("invites a re-run when the failure is retryable", async () => {
     await runWith([
-      { label: "Founder–Problem Fit", reason: "rate limited — try again in a moment.", kind: "retryable" },
+      { rubricKey: "ft", label: "Founder–Problem Fit", reason: "rate limited — try again in a moment.", kind: "retryable" },
     ]);
 
     expect(screen.getByText(/re-run to try/i)).toBeTruthy();
@@ -169,6 +206,7 @@ describe("failed blocks, by what a re-run would actually do", () => {
   it("does not invite a re-run when the failure is terminal", async () => {
     await runWith([
       {
+        rubricKey: "ft",
         label: "Founder–Problem Fit",
         reason: "Gemini stopped generating on this block (SAFETY).",
         kind: "terminal",
@@ -185,8 +223,8 @@ describe("failed blocks, by what a re-run would actually do", () => {
 
   it("invites a re-run for the retryable blocks only, when the kinds are mixed", async () => {
     await runWith([
-      { label: "Founder–Problem Fit", reason: "rate limited.", kind: "retryable" },
-      { label: "Personal Traits", reason: "the model declined (SAFETY).", kind: "terminal" },
+      { rubricKey: "ft", label: "Founder–Problem Fit", reason: "rate limited.", kind: "retryable" },
+      { rubricKey: "pm", label: "Personal Traits", reason: "the model declined (SAFETY).", kind: "terminal" },
     ]);
 
     expect(screen.getByText(/re-run to try/i)).toBeTruthy();

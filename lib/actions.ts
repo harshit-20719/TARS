@@ -271,7 +271,7 @@ export async function runExtractionAction(
      * `kind` is what lets the button tell a failure a re-run can fix from one
      * it cannot (KTD6) — "terminal" must not render a re-run invitation.
      */
-    failedBlocks: { label: string; reason: string; kind: string }[];
+    failedBlocks: { rubricKey: string; label: string; reason: string; kind: string }[];
     /**
      * Macro-dimensions that answered this run — including "read, and nothing
      * was there", which must never look like "never read" (R26). Computed all
@@ -312,7 +312,18 @@ export async function runExtractionAction(
         // droppedQuotes, so the texts would say the same thing twice.
         droppedClaims: summary.droppedClaims.length,
         mergedSpans: summary.mergedSpans,
-        failedBlocks: summary.failedBlocks.map((f) => ({ label: f.label, reason: f.reason, kind: f.kind })),
+        /**
+         * The key rides alongside the label so the caller can send exactly
+         * these blocks again. Without it a retry has to re-read all six to
+         * recover one, which spends five transcript reads to fix a block that
+         * failed for a reason the other five did not have.
+         */
+        failedBlocks: summary.failedBlocks.map((f) => ({
+          rubricKey: f.rubricKey,
+          label: f.label,
+          reason: f.reason,
+          kind: f.kind,
+        })),
         succeededBlocks: summary.succeededBlocks,
       },
     };
