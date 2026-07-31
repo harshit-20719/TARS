@@ -526,6 +526,76 @@ describe("extraction persistence", () => {
     expect(await db.observation.count({ where: { dealId } })).toBe(1);
   });
 
+  /**
+   * Six concurrent requests do not fit the deployment's budget, so the caller
+   * sends one block per request. Everything the service does about scoping was
+   * already per block; what these pin is that the flag survives being reached
+   * one request at a time, because that is what the batched caller depends on.
+   */
+  describe("a run spread across one request per block", () => {
+    it("reads only the block it was asked for", async () => {
+      const { callId, dealId } = await seedCall("One Block");
+      // The block that owns `verbatim`'s row — asking for any other one would
+      // correctly return nothing and prove nothing.
+      const owning = RUBRICS.find((r) =>
+        r.subs.some((sub) => sub.key === verbatim.subDimensionKey),
+      )!;
+      const summary = await runExtractionForCall(pm, callId, {
+        client: stubClient({ observations: [verbatim], claims: [] }),
+        blocks: [owning.key],
+      });
+
+      expect(summary.succeededBlocks).toEqual([owning.key]);
+      // One block attempted means one run row, not six.
+      expect(await db.extractionBlockRun.count({ where: { callId } })).toBe(1);
+      expect(await db.observation.count({ where: { dealId } })).toBe(1);
+    });
+
+    /**
+     * The flag has to come from the block run rows, not from this request's
+     * failure count. Read the old way, the very first block of six failed
+     * nothing and so turned the call green — and the guard above then refused
+     * every remaining block, because an extracted call is turned away without
+     * `force`. That is the batched caller deadlocking on its own first step.
+     */
+    it("stays un-extracted until every block has been read", async () => {
+      const { callId } = await seedCall("Sequenced");
+      const client = stubClient({ observations: [verbatim], claims: [] });
+
+      for (const [i, rubric] of RUBRICS.entries()) {
+        await runExtractionForCall(pm, callId, { client, blocks: [rubric.key], force: true });
+        const { extracted } = await db.call.findUniqueOrThrow({ where: { id: callId } });
+        const last = i === RUBRICS.length - 1;
+        expect(extracted, `after ${i + 1} of ${RUBRICS.length}`).toBe(last);
+      }
+
+      expect(await db.extractionBlockRun.count({ where: { callId, outcome: "READ" } })).toBe(
+        RUBRICS.length,
+      );
+    });
+
+    it("refuses an unknown block by name, before anything is spent", async () => {
+      const { callId } = await seedCall("Bad Block");
+      let asked = false;
+      const watching: ExtractionClient = {
+        messages: {
+          parse: async () => {
+            asked = true;
+            return { parsed_output: { observations: [], claims: [] }, stop_reason: "end_turn" };
+          },
+        },
+      };
+
+      await expect(
+        runExtractionForCall(pm, callId, { client: watching, blocks: ["not-a-rubric"] }),
+      ).rejects.toThrow(/no such macro-dimension: not-a-rubric/);
+      expect(asked).toBe(false);
+      // Nothing claimed either — a refused request must not leave a lease behind.
+      const call = await db.call.findUniqueOrThrow({ where: { id: callId } });
+      expect(call.extractionClaimedAt).toBeNull();
+    });
+  });
+
   it("marks the call extracted and refuses a silent re-run", async () => {
     const { callId } = await seedCall("Rerun Test");
     await runExtractionForCall(pm, callId, {

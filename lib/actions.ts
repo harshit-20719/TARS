@@ -248,7 +248,7 @@ export async function addCallAction(raw: unknown): Promise<ActionResult<string>>
 
 export async function runExtractionAction(
   callId: string,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; blocks?: readonly string[] } = {},
 ): Promise<
   ActionResult<{
     observations: number;
@@ -283,7 +283,16 @@ export async function runExtractionAction(
 > {
   try {
     const actor = await requireAuthor();
-    const summary = await capture.runExtractionForCall(actor, callId, { force: options.force });
+    /**
+     * `blocks` is picked out by name rather than spread, the same discipline
+     * the Fireflies action uses: the service's option bag also carries a
+     * `client` slot, and spreading what arrived from a browser would let a
+     * payload reach it. The service validates the keys themselves.
+     */
+    const summary = await capture.runExtractionForCall(actor, callId, {
+      force: options.force,
+      ...(options.blocks ? { blocks: options.blocks } : {}),
+    });
     revalidatePath("/deals", "layout");
     return {
       ok: true,

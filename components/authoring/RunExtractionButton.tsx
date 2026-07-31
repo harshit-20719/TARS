@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { RUBRICS } from "@/framework";
 import { runExtractionAction } from "@/lib/actions";
 import { useAction } from "@/lib/useAction";
 import { Icon } from "@/components/icons";
@@ -24,11 +25,66 @@ export function RunExtractionButton({
   const extract = useAction(runExtractionAction);
   type Summary = Extract<Awaited<ReturnType<typeof runExtractionAction>>, { ok: true }>["data"];
   const [summary, setSummary] = useState<Summary | null>(null);
+  /** Which block the sequence is on, for the label. Null when not running. */
+  const [progress, setProgress] = useState<{ done: number; label: string } | null>(null);
 
+  /**
+   * One request per macro-dimension, in sequence — still one press.
+   *
+   * Six concurrent requests do not fit the deployment's budget: Gemini's free
+   * tier serves about one of them and leaves the rest queued until they hit the
+   * forty-second block bound, which is why five of six blocks came back unread
+   * with all five pinned at exactly that number. Raising the bound is not
+   * available — 40s of model time plus the write phase already puts the worst
+   * case at 50s against a 60-second function ceiling — so the run is spread
+   * across invocations instead of across one.
+   *
+   * The sequence never aborts on a failure. Each request writes its own block
+   * in its own transaction, so a block that fails costs that block and nothing
+   * else, and stopping early would throw away five good blocks for one bad one.
+   *
+   * `force` is passed on every request once a call has been extracted before,
+   * because the service refuses an extracted call without it — and the call
+   * stays extracted throughout a re-run, since every block still holds a read
+   * record from last time.
+   */
   async function run() {
     setSummary(null);
-    const r = await extract.run(callId, { force: alreadyExtracted });
-    if (r.ok) setSummary(r.data);
+    const merged: Summary = {
+      observations: 0,
+      claims: 0,
+      droppedQuotes: [],
+      droppedClaims: 0,
+      mergedSpans: 0,
+      failedBlocks: [],
+      succeededBlocks: [],
+    };
+
+    for (const [i, rubric] of RUBRICS.entries()) {
+      setProgress({ done: i, label: rubric.label });
+      const r = await extract.run(callId, {
+        force: alreadyExtracted,
+        blocks: [rubric.key],
+      });
+      if (!r.ok) {
+        // A refused request — auth, a rule, a database fault — is about the
+        // whole call rather than this block, so there is nothing to gain by
+        // sending the remaining five. `extract.error` renders it.
+        setProgress(null);
+        setSummary(merged.succeededBlocks.length || merged.failedBlocks.length ? merged : null);
+        return;
+      }
+      merged.observations += r.data.observations;
+      merged.claims += r.data.claims;
+      merged.droppedQuotes.push(...r.data.droppedQuotes);
+      merged.droppedClaims += r.data.droppedClaims;
+      merged.mergedSpans += r.data.mergedSpans;
+      merged.failedBlocks.push(...r.data.failedBlocks);
+      merged.succeededBlocks.push(...r.data.succeededBlocks);
+    }
+
+    setProgress(null);
+    setSummary(merged);
   }
 
   return (
@@ -40,15 +96,21 @@ export function RunExtractionButton({
         onClick={run}
       >
         <Icon name="play" />
-        {extract.pending
-          ? "Reading all six blocks…"
+        {progress
+          ? `Reading ${progress.done + 1} of ${RUBRICS.length}…`
           : alreadyExtracted
             ? "Re-extract (replaces drafts)"
             : "Run extraction"}
       </button>
-      {/* Six calls run at once and each reads the whole transcript, so this is a
-          twenty-to-forty second wait. Saying so stops it looking like a hang. */}
-      {extract.pending && <span className="ctl-note">20–40 seconds</span>}
+      {/* The blocks are read one at a time now, so the wait is the sum rather
+          than the slowest — minutes, not seconds. Naming the block being read
+          is what makes a long wait legible instead of looking like a hang, and
+          each block's evidence is saved by the time its name is replaced. */}
+      {progress && (
+        <span className="ctl-note">
+          {progress.label} — each block is saved as it lands
+        </span>
+      )}
       {summary && (
         <span className="ctl-note">
           {summary.observations} observation{summary.observations === 1 ? "" : "s"},{" "}
@@ -67,8 +129,8 @@ export function RunExtractionButton({
       */}
       {summary && summary.failedBlocks.some((f) => f.kind !== "terminal") && (
         <div className="ctl-err" style={{ flexBasis: "100%" }}>
-          {summary.failedBlocks.filter((f) => f.kind !== "terminal").length} of six blocks failed and wrote
-          nothing — the rest saved. Re-run to try them again.
+          {summary.failedBlocks.filter((f) => f.kind !== "terminal").length} of {RUBRICS.length} blocks
+          failed and wrote nothing — the rest saved. Re-run to try them again.
           <ul className="drop-list">
             {summary.failedBlocks
               .filter((f) => f.kind !== "terminal")

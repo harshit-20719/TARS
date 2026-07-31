@@ -21,7 +21,7 @@ import * as z from "zod";
 import { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
-import { subByKey } from "@/framework";
+import { RUBRICS, subByKey } from "@/framework";
 import { encodeScoreValue, parseRecordDate } from "@/lib/domain/codec";
 import { assertLayer, assertScoreValue } from "@/lib/domain/rules";
 import { RuleViolation } from "@/lib/domain/rules";
@@ -398,6 +398,27 @@ export interface RunExtractionOptions {
   model?: string;
   /** Re-run over a call already extracted, replacing drafts the PM has not ruled on. */
   force?: boolean;
+  /**
+   * Which macro-dimensions this request reads, by rubric key. Absent means all
+   * six — the shape every caller had before, and still the shape the service
+   * treats as one whole run.
+   *
+   * This exists because six concurrent requests do not fit the deployment's
+   * budget. Gemini's free tier serves roughly one of them and leaves the rest
+   * queued until they hit the block bound, which shows up as five blocks
+   * pinned at exactly forty seconds while one reads cleanly — a serialization
+   * signature, not a slow-generation one. Raising the bound is not available:
+   * the 40s here plus 2s of maxWait plus the 8s transaction already put the
+   * worst case at 50s against a 60-second function ceiling.
+   *
+   * So the caller sends one block at a time, each in its own function
+   * invocation with its own full budget, and the run's shape moves from "one
+   * request doing six things" to "six requests doing one thing each". Nothing
+   * else about a run changes: the delete is already scoped to the blocks that
+   * read, and the block run rows are already per block, so a partial sequence
+   * lands exactly as a partial fan-out always did.
+   */
+  blocks?: readonly string[];
 }
 
 export interface RunExtractionSummary extends ExtractionResult {
@@ -428,6 +449,30 @@ export async function runExtractionForCall(
   options: RunExtractionOptions = {},
 ): Promise<RunExtractionSummary> {
   assertMayAuthor(actor);
+
+  /**
+   * Resolve the requested blocks before anything is spent or claimed.
+   *
+   * An unknown key is a caller bug, not a bad run: it would silently narrow
+   * the request to nothing and land as a clean run that read no blocks — which
+   * is the one outcome this whole path is built to make impossible. Refused by
+   * name instead. Order comes from the framework rather than from the caller,
+   * so a run's blocks are always in the record's canonical order.
+   */
+  const blocks = options.blocks
+    ? (() => {
+        const wanted = new Set(options.blocks);
+        const known = RUBRICS.filter((r) => wanted.has(r.key));
+        if (known.length !== wanted.size) {
+          const unknown = [...wanted].filter((k) => !RUBRICS.some((r) => r.key === k));
+          throw new RuleViolation(`no such macro-dimension: ${unknown.join(", ")}`, "blocks");
+        }
+        if (known.length === 0) {
+          throw new RuleViolation("a run must read at least one macro-dimension", "blocks");
+        }
+        return known;
+      })()
+    : undefined;
 
   const call = await db.call.findUnique({
     where: { id: callId },
@@ -508,7 +553,7 @@ export async function runExtractionForCall(
         company: call.deal.company,
         callLabel: call.label,
       },
-      { client: options.client, model: options.model, tuning },
+      { client: options.client, model: options.model, tuning, blocks },
     );
 
     /**
@@ -949,16 +994,43 @@ export async function runExtractionForCall(
         });
 
         /**
-         * A call is only "extracted" when every block was read.
+         * A call is only "extracted" when every block has been read.
          *
          * Marking it extracted after a partial run made the missing blocks
          * indistinguishable from blocks that genuinely had nothing in them: the
          * failure list lived only in the button's local state, so one refresh and the
          * transcript page showed a plain green chip over an incomplete read.
+         *
+         * Read from the block run rows rather than from this request's failure
+         * count, because a request is no longer the same thing as a run. When a
+         * caller sends one block at a time, "this request failed nothing" is true
+         * of the very first block of six and would flip the flag green over a
+         * call five blocks short — and then refuse the rest of the sequence,
+         * since the guard above turns an extracted call away without `force`.
+         * Counting rows asks the question that was always meant: has every
+         * macro-dimension been read, by whatever combination of requests.
          */
+        const readBlocks = await tx.extractionBlockRun.count({
+          where: {
+            callId,
+            outcome: "READ",
+            /**
+             * Restricted to the blocks the framework has now, because the rows
+             * outlive it. A row for a macro-dimension that has since been
+             * renamed or dropped still sits against the call — the replacement
+             * rule deliberately leaves rows it did not attempt standing — and
+             * counting it would make a call look fully read on five current
+             * blocks and one that no longer exists. The same restriction gives
+             * the right answer in the other direction: add a seventh
+             * macro-dimension and every call correctly stops being extracted
+             * until that block has been read too.
+             */
+            rubricKey: { in: RUBRICS.map((r) => r.key) },
+          },
+        });
         await tx.call.update({
           where: { id: callId },
-          data: { extracted: result.failedBlocks.length === 0 },
+          data: { extracted: readBlocks === RUBRICS.length },
         });
 
         return {
