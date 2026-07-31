@@ -558,9 +558,35 @@ export async function runExtractionForCall(
      * back only the sixth — destroying real work while looking like a normal retry,
      * which is exactly what the button invites the PM to do.
      */
+    /**
+     * A block only clears its prior rows when this run actually has something
+     * to put back, or genuinely found nothing.
+     *
+     * The adapter guard (KTD5) stops a block being called read when the model
+     * returned nothing usable. It cannot stop a block being read, returning
+     * quotes, and then being emptied downstream by the verbatim guard — and
+     * that is a reachable state, because an admin's guidance and temperature
+     * both move the drop rate and neither is confirmed per deal. Left
+     * unguarded, a block that dropped every quote it found would clear a
+     * previous run's evidence and write nothing back, under a green chip.
+     *
+     * So a read block with no surviving observations keeps its prior rows when
+     * the guard is what emptied it, and clears them when the model itself came
+     * back empty — which is the honest reading of "read it and there was
+     * nothing there".
+     */
+    const emptiedByGuard = new Set(
+      result.succeededBlocks.filter(
+        (key) =>
+          !result.observations.some((o) => o.rubricKey === key) &&
+          (result.droppedByBlock[key]?.quotes ?? 0) > 0,
+      ),
+    );
+    const rewrittenBlocks = result.succeededBlocks.filter((k) => !emptiedByGuard.has(k));
+
     const rewritten: Prisma.ObservationWhereInput = {
       ...machineWritten,
-      rubricKey: { in: result.succeededBlocks },
+      rubricKey: { in: rewrittenBlocks },
     };
 
     const written = await db.$transaction(
@@ -612,6 +638,15 @@ export async function runExtractionForCall(
         const incumbents = await tx.observation.findMany({
           where: { ...machineWritten, rubricKey: { notIn: result.succeededBlocks } },
           select: { id: true, quote: true, rubricKey: true, confidence: true },
+          /**
+           * Ordered so the contest stays deterministic all the way down. The
+           * comparator returns 0 for two filings that tie on confidence and
+           * block — which legacy within-block duplicates do — and an unordered
+           * read would then let Postgres's row order pick the survivor, so two
+           * identical re-runs could delete different rows. Oldest first matches
+           * the in-memory pass's rule; the id breaks a same-instant tie.
+           */
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         });
         const incumbentsBySpan = new Map<string, typeof incumbents>();
         for (const row of incumbents) {
@@ -742,25 +777,63 @@ export async function runExtractionForCall(
          * has already populated by now.
          */
         const dethronedIds: string[] = [];
+        /**
+         * Batched by winner rather than one statement per contested span. The
+         * transaction's ceiling was cut to eight seconds on the argument that
+         * it holds a few batched statements instead of N; a per-collision loop
+         * would put N round trips back inside it, on exactly the shape the
+         * button invites — a retry after a partial failure, against a call
+         * whose unread blocks hold many duplicate spans.
+         */
+        const repoints = new Map<string, string[]>();
         for (const d of dethronedByNewcomer) {
           const winnerId = quoteToId.get(d.winnerKey);
           // The winner was in this run's insert, so it is always in the map;
           // guarded so an impossible miss keeps the incumbent rather than
           // cascading its claims away with nothing to catch them.
           if (!winnerId) continue;
-          await tx.claim.updateMany({
-            where: { anchorObsId: { in: d.ids } },
-            data: { anchorObsId: winnerId },
-          });
+          repoints.set(winnerId, [...(repoints.get(winnerId) ?? []), ...d.ids]);
           dethronedIds.push(...d.ids);
         }
         for (const d of dethronedByIncumbent) {
-          await tx.claim.updateMany({
-            where: { anchorObsId: { in: d.ids } },
-            data: { anchorObsId: d.winnerId },
-          });
+          repoints.set(d.winnerId, [...(repoints.get(d.winnerId) ?? []), ...d.ids]);
           dethronedIds.push(...d.ids);
         }
+
+        for (const [winnerId, loserIds] of repoints) {
+          await tx.claim.updateMany({
+            where: { anchorObsId: { in: loserIds } },
+            data: { anchorObsId: winnerId },
+          });
+          /**
+           * The second cascade, and the one the claim repoint above nearly
+           * missed. ScoreEvidence.observation also cascades on delete, and a
+           * machine filing lands `accepted` with no decider — which is exactly
+           * what setScore cites by default. So a dethroned incumbent in a block
+           * this run never read can be carrying a saved score's citation, and
+           * deleting it would shrink that score's evidence with nothing said.
+           *
+           * The citation moves to the surviving filing of the same span rather
+           * than being dropped, which is what decideObservation already does
+           * when a person re-maps a cited row. `skipDuplicates` covers the
+           * score that cites both the winner and a loser; its loser row then
+           * cascades away as intended.
+           */
+          const cites = await tx.scoreEvidence.findMany({
+            where: { observationId: { in: loserIds } },
+            select: { scoreId: true },
+          });
+          if (cites.length) {
+            await tx.scoreEvidence.createMany({
+              data: [...new Set(cites.map((c) => c.scoreId))].map((scoreId) => ({
+                scoreId,
+                observationId: winnerId,
+              })),
+              skipDuplicates: true,
+            });
+          }
+        }
+
         if (dethronedIds.length) {
           await tx.observation.deleteMany({ where: { id: { in: dethronedIds } } });
         }
@@ -788,7 +861,30 @@ export async function runExtractionForCall(
             },
           ];
         });
-        if (claimRows.length) await tx.claim.createMany({ data: claimRows });
+        /**
+         * A claim deferred onto a surviving incumbent must not accumulate.
+         *
+         * When an incumbent in an unread block wins the contest, its newcomer
+         * is never written but the newcomer's claims are anchored to the
+         * incumbent instead. That incumbent sits outside `rewritten`, so it is
+         * never deleted and its claims never cascade away — and the next
+         * identical re-run loses the same contest and writes the same claims
+         * again. After N partial re-runs the ledger L2 verifies against would
+         * hold N copies of one assertion. Dropping what is already there keeps
+         * a re-run idempotent for the claims as well as the filings.
+         */
+        const incumbentAnchorIds = [...new Set(incumbentAnchors.map((a) => a.id))];
+        const alreadyClaimed = incumbentAnchorIds.length
+          ? await tx.claim.findMany({
+              where: { anchorObsId: { in: incumbentAnchorIds } },
+              select: { anchorObsId: true, text: true },
+            })
+          : [];
+        const claimedKeys = new Set(alreadyClaimed.map((c) => `${c.anchorObsId}::${c.text}`));
+        const freshClaimRows = claimRows.filter(
+          (r) => !claimedKeys.has(`${r.anchorObsId}::${r.text}`),
+        );
+        if (freshClaimRows.length) await tx.claim.createMany({ data: freshClaimRows });
 
         /**
          * The run's durable record (KTD16): one row per block this run attempted,
@@ -860,7 +956,7 @@ export async function runExtractionForCall(
 
         return {
           observationsWritten: persisted.length,
-          claimsWritten: claimRows.length,
+          claimsWritten: freshClaimRows.length,
           /** Re-created quotes the PM had already ruled on, and so were skipped. */
           skippedAlreadyRuledOn: result.observations.length - fresh.length,
           /** In-run merges plus the cross-run collisions this transaction settled. */
@@ -910,10 +1006,22 @@ export async function runExtractionForCall(
      * seized the call, clearing the column unconditionally would hand the
      * call to a third run while the second was still working it.
      */
-    await db.call.updateMany({
-      where: { id: callId, extractionClaimedAt: claimStamp },
-      data: { extractionClaimedAt: null },
-    });
+    try {
+      await db.call.updateMany({
+        where: { id: callId, extractionClaimedAt: claimStamp },
+        data: { extractionClaimedAt: null },
+      });
+    } catch (releaseError) {
+      /**
+       * Swallowed on purpose. This is the last statement of the request, after
+       * the transaction has already committed — an unguarded throw here would
+       * discard a fully written run and tell the PM nothing was saved, whose
+       * natural next move is to pay for the whole extraction again. The claim's
+       * own expiry is the backstop: a release that fails costs one wait window,
+       * never the run's real outcome.
+       */
+      console.error(`extraction: could not release the claim on call ${callId}`, releaseError);
+    }
   }
 }
 

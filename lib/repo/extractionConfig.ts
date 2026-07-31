@@ -82,6 +82,14 @@ export async function saveExtractionConfig(input: SaveExtractionConfig): Promise
 export interface RubricDropCount {
   rubricKey: string;
   droppedQuotes: number;
+  /**
+   * Whether that run actually read the block. Carried because the count alone
+   * cannot say: a failed block's row takes the column default of 0, so without
+   * this a run that read nothing reports "dropped 0 quotes" — which reads as a
+   * clean pass on the admin page and invites raising temperature on the
+   * strength of a reading that never happened.
+   */
+  read: boolean;
   /** The tuning version that run carried. Null when it ran under defaults. */
   configVersion: number | null;
   ranAt: Date;
@@ -104,13 +112,22 @@ export interface RubricDropCount {
 export async function latestDropCountsByRubric(): Promise<RubricDropCount[]> {
   const rows = await db.extractionBlockRun.findMany({
     orderBy: { ranAt: "desc" },
-    select: { rubricKey: true, droppedQuotes: true, configVersion: true, ranAt: true },
+    select: {
+      rubricKey: true,
+      droppedQuotes: true,
+      outcome: true,
+      configVersion: true,
+      ranAt: true,
+    },
   });
 
   const latest = new Map<string, RubricDropCount>();
   for (const row of rows) {
     // Descending by time, so the first row seen for a rubric is its latest run.
-    if (!latest.has(row.rubricKey)) latest.set(row.rubricKey, row);
+    if (!latest.has(row.rubricKey)) {
+      const { outcome, ...rest } = row;
+      latest.set(row.rubricKey, { ...rest, read: outcome === "READ" });
+    }
   }
   return RUBRICS.map(({ key }) => latest.get(key)).filter((r): r is RubricDropCount => Boolean(r));
 }

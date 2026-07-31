@@ -827,6 +827,60 @@ describe("extraction persistence", () => {
       expect(second[0].rubricKey).toBe("ft");
     });
 
+    /**
+     * The hole the adapter guard does not cover (KTD5).
+     *
+     * A block that returns quotes and then loses every one of them to the
+     * verbatim check is still a read block — validated output arrived. But the
+     * scoped delete would clear that block's earlier evidence and write nothing
+     * back, which is the loss the scoping exists to prevent, reached from
+     * inside rather than from a provider failure. An admin's guidance and
+     * temperature both move the drop rate, so this is a lever a person can pull
+     * without touching a deal.
+     */
+    it("keeps a block's prior filings when the verbatim guard empties this run's", async () => {
+      const { dealId, callId } = await seedCall("Guard Wipe Test");
+      await runExtractionForCall(pm, callId, {
+        client: routed({ ft: { observations: [filing("earned-insight", "high")] } }),
+      });
+      expect(await db.observation.count({ where: { dealId } })).toBe(1);
+
+      // The same block reads again and returns only a paraphrase — nothing in
+      // the transcript word for word, so the guard discards all of it.
+      await runExtractionForCall(pm, callId, {
+        force: true,
+        client: routed({
+          ft: {
+            observations: [
+              { ...filing("earned-insight", "high"), quote: "A tidied paraphrase of the line." },
+            ],
+          },
+        }),
+      });
+
+      const rows = await db.observation.findMany({ where: { dealId } });
+      expect(rows, "the earlier filing was wiped by a run that filed nothing").toHaveLength(1);
+      expect(rows[0].subDimensionKey).toBe("earned-insight");
+    });
+
+    /**
+     * The distinction the guard above rests on: a block that genuinely read and
+     * found nothing does clear its rows. Otherwise stale evidence would outlive
+     * the transcript it came from, and "read it and there was nothing there"
+     * would have no way to be recorded.
+     */
+    it("clears a block's prior filings when the model itself returns nothing", async () => {
+      const { dealId, callId } = await seedCall("Empty Read Test");
+      await runExtractionForCall(pm, callId, {
+        client: routed({ ft: { observations: [filing("earned-insight", "high")] } }),
+      });
+      expect(await db.observation.count({ where: { dealId } })).toBe(1);
+
+      await runExtractionForCall(pm, callId, { force: true, client: routed({}) });
+
+      expect(await db.observation.count({ where: { dealId } })).toBe(0);
+    });
+
     it("collapses a span one block returned twice to one filing", async () => {
       const { dealId, callId } = await seedCall("Twice Filed Test");
       await runExtractionForCall(pm, callId, {

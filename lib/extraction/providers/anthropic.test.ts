@@ -306,7 +306,7 @@ describe("outcome mapping onto the failure taxonomy", () => {
   it.each([
     ["a rate limit", { status: 429, error: {} }, "retryable", /rate limited/],
     ["an outage", { status: 529, error: {} }, "retryable", /unavailable/],
-    ["a bad key", { status: 401, error: { error: { message: "invalid x-api-key" } } }, "terminal", /ANTHROPIC_API_KEY is not valid/],
+    ["a bad key", { status: 401, error: { error: { message: "invalid x-api-key" } } }, "terminal", /that API key is not valid/],
     ["an unknown model", { status: 404, error: {} }, "terminal", /check EXTRACTION_MODEL/],
     ["a dropped connection", { message: "fetch failed" }, "retryable", /could not reach the API/],
     [

@@ -18,6 +18,16 @@
  * binding at the top level.
  */
 
+/**
+ * The same trip-wire the Gemini adapter carries. No key reaches a browser
+ * today — Next inlines nothing without a NEXT_PUBLIC_ prefix and the SDK
+ * refuses browser use — but this module reads a credential, and the admin
+ * page already pulls a pure helper (`acceptsTemperature`) out of it. The next
+ * person who wants that helper in a client control should hit a build error,
+ * not discover the problem in a bundle.
+ */
+import "server-only";
+
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import {

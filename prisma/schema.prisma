@@ -158,7 +158,8 @@ model Call {
 
   /// When a run claimed this call for extraction (KTD17). Null when nothing
   /// holds it. The column lands in the block-run migration so the plan carries
-  /// one migration, but the lease logic itself is U7's — nothing writes this yet.
+  /// Written by runExtractionForCall: a conditional update claims the call before
+  /// the fan-out and a finally releases it, with a 60s takeover expiry.
   extractionClaimedAt DateTime?
 
   blockRuns ExtractionBlockRun[]
@@ -199,7 +200,8 @@ model ExtractionBlockRun {
   droppedQuotes Int @default(0)
   /// Claims from this block whose anchor quote did not survive verification.
   droppedClaims Int @default(0)
-  /// Duplicate spans merged away. Stays 0 until the dedupe pass lands (U6).
+  /// Duplicate spans merged away — in-run merges from lib/extraction/dedupe.ts
+  /// plus the cross-run collisions settled in the persistence transaction.
   mergedSpans   Int @default(0)
 
   /// Which extraction-config version the run read with. Null until per-rubric
@@ -237,7 +239,8 @@ model Observation {
   /// to the text that was live when the machine wrote this. Null on every row
   /// written before per-rubric config existed, and on rows drafted under a
   /// rubric nobody has tuned — an absent config has no version to stamp. The
-  /// run writes it from U12; nothing sets it yet.
+  /// run stamps it from the config snapshot read once before the fan-out; null
+  /// where that block is untuned.
   configVersion Int?
 
   /// Who accepted / edited / rejected it, and when.

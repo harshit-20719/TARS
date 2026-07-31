@@ -151,19 +151,30 @@ function resolveClient(injected?: GeminiExtractionClient): GeminiExtractionClien
     );
   }
 
-  // Constructed lazily — the factory runs per request, never at module scope,
-  // for the reason lib/services/import.ts spells out: a module-level client
-  // would read the credential at import time, and importing this module must
-  // never require a key.
-  //
-  // `attempts: 1` lives here and not per request, deliberately: the SDK reads
-  // retryOptions from the client options and IGNORES it per-request. One
-  // attempt for the same reason BLOCK_RETRIES is 0 next door — a retry that
-  // outruns the function ceiling turns a partial success into a total loss.
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: { retryOptions: { attempts: 1 } },
-  }) as unknown as GeminiExtractionClient;
+  /**
+   * Constructed lazily — the factory runs per request, never at module scope,
+   * for the reason lib/services/import.ts spells out: a module-level client
+   * would read the credential at import time, and importing this module must
+   * never require a key.
+   *
+   * `retryOptions` is deliberately NOT set, and the omission is load-bearing
+   * twice over. The SDK's `apiCall` returns a plain `fetch` when the option is
+   * absent — so absent already means zero retries, which is what BLOCK_RETRIES
+   * gives the adapter next door and for the same reason: a retry that outruns
+   * the function ceiling turns a partial success into a total loss.
+   *
+   * Setting it would also silently break failure classification. With
+   * `retryOptions` present the SDK routes through `pRetry`, where a non-OK
+   * response throws a bare `Error` from inside the retry body — so
+   * `throwErrorIfNotOK`, the only place an `ApiError` carrying a numeric
+   * `status` is built, never runs. `classifyApiFailure` below gates on that
+   * status, so every HTTP failure would fall through to `null` and be recorded
+   * retryable: a bad key, a wrong model, a rejected schema and an oversized
+   * transcript would each invite an endless re-run that spends a full
+   * transcript read per press and can never succeed. The terminal branch would
+   * be unreachable on this provider, which is the whole of KTD6.
+   */
+  return new GoogleGenAI({ apiKey }) as unknown as GeminiExtractionClient;
 }
 
 /** The generated text, wherever the response put it. */

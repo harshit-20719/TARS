@@ -11,8 +11,9 @@
 CREATE TYPE "ExtractionOutcome" AS ENUM ('read', 'failed-retryable', 'failed-terminal');
 
 -- "extractionClaimedAt" is U7's lease column (KTD17), folded in here so the
--- plan carries one migration rather than two. Nothing writes it yet; the
--- claim/release logic arrives with U7.
+-- plan carries one migration rather than two. The claim/release logic ships in
+-- the same change: a conditional update claims the call before the fan-out and
+-- a finally releases it, with a 60s takeover expiry.
 
 -- AlterTable
 ALTER TABLE "Call" ADD COLUMN     "extractionClaimedAt" TIMESTAMP(3);

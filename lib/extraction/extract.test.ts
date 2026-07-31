@@ -407,7 +407,7 @@ describe("extractFromTranscript", () => {
     };
     await expect(
       extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client }),
-    ).rejects.toThrow(/ANTHROPIC_API_KEY is not valid/);
+    ).rejects.toThrow(/that API key is not valid/);
   });
 
   it("refuses an empty transcript before calling the model", async () => {
@@ -555,7 +555,7 @@ describe("API failures are reported, not thrown past the action layer", () => {
   });
 
   const cases: [string, unknown, RegExp][] = [
-    ["a bad key", { status: 401, error: { error: { message: "invalid x-api-key" } } }, /ANTHROPIC_API_KEY is not valid/],
+    ["a bad key", { status: 401, error: { error: { message: "invalid x-api-key" } } }, /that API key is not valid/],
     ["no credit", { status: 400, error: { error: { message: "Your credit balance is too low" } } }, /credit balance is too low/],
     ["an unknown model", { status: 404, error: { error: { message: "model: nope" } } }, /check EXTRACTION_MODEL/],
     ["a forbidden key", { status: 403, error: {} }, /not permitted/],
@@ -643,7 +643,7 @@ describe("API failures are reported, not thrown past the action layer", () => {
     expect(describeApiFailure(null)).toMatch(/could not reach the API/);
     expect(describeApiFailure("timeout")).toMatch(/did not finish this block within \d+ seconds/);
     expect(describeApiFailure(400)).toMatch(/rejected the request/);
-    expect(describeApiFailure(401)).toMatch(/ANTHROPIC_API_KEY is not valid/);
+    expect(describeApiFailure(401)).toMatch(/that API key is not valid/);
     expect(describeApiFailure(429)).toMatch(/rate limited/);
     expect(describeApiFailure(500)).toMatch(/unavailable/);
     expect(describeApiFailure(529)).toMatch(/unavailable/);

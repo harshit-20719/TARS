@@ -145,13 +145,19 @@ export function describeApiFailure(
 
   switch (status) {
     case 401:
-      return `the ANTHROPIC_API_KEY is not valid, so no drafts were written.${said}`;
+      // Names no provider: this function is reached from both adapters, and
+      // telling a Gemini deployment its ANTHROPIC_API_KEY is wrong points the
+      // one person who can fix it at the wrong variable.
+      return `that API key is not valid, so no drafts were written.${said}`;
     case 403:
       return `that API key is not permitted to use this model.${said}`;
     case 404:
+      // No default named: unsetting EXTRACTION_MODEL falls back to whichever
+      // provider is active, and naming the other one sends the operator to a
+      // model that is not going to run.
       return (
-        `there is no model by that name — check EXTRACTION_MODEL, or unset it to ` +
-        `fall back to ${DEFAULT_EXTRACTION_MODEL}.${said}`
+        `there is no model by that name — check EXTRACTION_MODEL, or unset it ` +
+        `to fall back to the active provider's default.${said}`
       );
     case 400:
       // Where a bad parameter and an exhausted credit balance both land.
