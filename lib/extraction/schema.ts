@@ -145,32 +145,25 @@ export function geminiResponseJsonSchemaFor(rubric: Rubric): Record<string, unkn
   };
 
   /**
-   * A ceiling on how many filings one block may return — and the reason it
-   * exists is not tidiness, it is that an unbounded array has no stopping
-   * condition.
+   * No `maxItems` here, and it is not an oversight.
    *
-   * Constrained decoding forces the model's output to satisfy this schema
-   * token by token. With no `maxItems`, "another observation" is always a
-   * legal next token, so nothing in the grammar ever requires the array to
-   * close; the model emitted filings until the output cap or the clock stopped
-   * it. That is what a real run looked like: six blocks finishing at 38.6,
-   * 38.8, 38.6, 38.7, 38.9 and 39.0 seconds against a forty-second bound —
-   * a four-hundred-millisecond spread across blocks whose prompts differ by
-   * half — and the one that got there first reporting MAX_TOKENS. Six
-   * different readings do not take the same time; six runaways do.
-   *
-   * Four per row is a bound, not a target. A block of seven rows may return
-   * twenty-eight filings where a full one runs closer to ten, so the cap never
-   * binds on an honest answer and always binds on a loop.
+   * An array bound is the obvious way to stop a model that will not stop, and
+   * Gemini rejects it outright: a length limit on a nested object array makes
+   * its constrained-decoding compiler refuse the whole request with 400
+   * INVALID_ARGUMENT — "the specified schema produces a constraint that has too
+   * many states for serving... schemas with long array length limits
+   * (especially when nested)". Every block failed that way in 0.6 seconds. The
+   * bound has to live somewhere the grammar compiler does not see it: the
+   * prompt says how many filings a block should hold, and the sampling
+   * temperature keeps the model out of the repetition loop that made an
+   * unbounded array dangerous in the first place.
    */
-  const maxItems = rubric.subs.length * 4;
 
   return {
     type: "object",
     properties: {
-      observations: { type: "array", items: observation, maxItems },
-      // Claims anchor to observations, so they cannot honestly outnumber them.
-      claims: { type: "array", items: claim, maxItems },
+      observations: { type: "array", items: observation },
+      claims: { type: "array", items: claim },
     },
     required: ["observations", "claims"],
     additionalProperties: false,

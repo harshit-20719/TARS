@@ -16,6 +16,20 @@ import { systemPromptFor } from "./prompt";
 
 const block = RUBRICS[0];
 
+/**
+ * The output bound the schema cannot carry. Gemini rejects `maxItems` on a
+ * nested array outright, so the only place left to say "stop" is the prompt —
+ * and a model with no stated ceiling and an unbounded array generated filings
+ * until the clock cut it off.
+ */
+describe("the ceiling on how much a block returns", () => {
+  it("tells the model when to stop, since the schema may not", () => {
+    const prompt = systemPromptFor(RUBRICS[0], {});
+    expect(prompt).toMatch(/ten to twenty observations/);
+    expect(prompt).toMatch(/close the list and stop/);
+  });
+});
+
 describe("an untuned prompt", () => {
   it("is byte-identical whether tuning is absent, empty, or blank", () => {
     const base = systemPromptFor(block);

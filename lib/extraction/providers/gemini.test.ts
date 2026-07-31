@@ -296,20 +296,17 @@ describe("the request build", () => {
     expect(schema).toEqual(geminiResponseJsonSchemaFor(BLOCK));
 
     /**
-     * Both arrays are bounded. Constrained decoding satisfies this schema token
-     * by token, so with no maxItems "another observation" stays a legal next
-     * token forever and nothing ever requires the array to close — which is how
-     * six blocks all ran to the clock within four hundred milliseconds of each
-     * other, one of them reporting MAX_TOKENS. The bound is the stopping
-     * condition the grammar was missing.
+     * No array length limit, and a test says so on purpose. `maxItems` on a
+     * nested object array is what Gemini's constrained-decoding compiler
+     * refuses: 400 INVALID_ARGUMENT, "too many states for serving", every block
+     * rejected in 0.6 seconds. The obvious guard against a runaway is the one
+     * the provider will not accept, so it lives in the prompt instead.
      */
     const props = schema.properties as Record<string, Record<string, unknown>>;
     for (const key of ["observations", "claims"]) {
-      expect(props[key].maxItems, key).toBe(BLOCK.subs.length * 4);
+      expect(props[key].maxItems, key).toBeUndefined();
+      expect(props[key].minItems, key).toBeUndefined();
     }
-    // Generous against an honest answer: a full block runs nearer ten filings
-    // than twenty-eight, so the cap binds on a loop and never on a real read.
-    expect(props.observations.maxItems as number).toBeGreaterThan(BLOCK.subs.length);
 
     const observation = (
       (schema.properties as Record<string, Record<string, unknown>>).observations
