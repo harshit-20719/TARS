@@ -99,6 +99,11 @@ export interface ExtractionBlockRun {
   mergedSpans: number;
   /** Which extraction-config version the run read with. Absent until tuning lands. */
   configVersion?: number;
+  /**
+   * How long the block took, in milliseconds, across every attempt. Absent on
+   * rows written before it was measured — which is not the same as instant.
+   */
+  durationMs?: number;
   /** When the run recorded this outcome. */
   ranAt: string;
 }

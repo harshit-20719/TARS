@@ -88,6 +88,12 @@ export function geminiThinkingConfigFor(model: string): Record<string, unknown> 
  * deprecated and must not be sent; modelArmorConfig is mutually exclusive
  * with safetySettings and is not sent either.
  */
+/**
+ * The ceiling on one block's answer. Matches the Anthropic adapter's
+ * `max_tokens`, because it is sized to the same job rather than to a provider.
+ */
+export const MAX_OUTPUT_TOKENS = 8000;
+
 const SAFETY_OFF = [
   { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
   { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
@@ -249,6 +255,24 @@ export function createGeminiProvider(
          */
         responseJsonSchema: geminiResponseJsonSchemaFor(rubric),
         thinkingConfig: geminiThinkingConfigFor(model),
+        /**
+         * A ceiling on the answer, and therefore on how long producing it can
+         * take. The Anthropic adapter has capped at 8000 from the start for
+         * this exact reason; this side shipped with no cap at all, so a block
+         * that decided to enumerate generated until the deadline cut it off —
+         * which is one of the ways a block reaches the bound and returns
+         * nothing rather than something.
+         *
+         * The same number, because it is sized to the same job: six or seven
+         * rows of quotes and one mapping clause each, where a full block runs
+         * closer to a thousand tokens. It is headroom, not a target.
+         *
+         * Capping is safe here specifically because truncation is loud: a
+         * MAX_TOKENS finish reason fails the outcome contract above and throws
+         * (KTD5), so a cut-off block is never mistaken for a clean read of a
+         * block that had little in it.
+         */
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
         safetySettings: [...SAFETY_OFF],
         /**
          * The port's per-call bound. Note the SDK implements this by raising

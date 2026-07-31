@@ -114,6 +114,7 @@ const CALL_META_SELECT = {
       droppedClaims: true,
       mergedSpans: true,
       configVersion: true,
+      durationMs: true,
       ranAt: true,
     },
     orderBy: { rubricKey: "asc" },

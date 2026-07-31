@@ -266,6 +266,18 @@ export interface ExtractionResult {
    * put nothing back — losing real work while looking like a successful retry.
    */
   succeededBlocks: string[];
+  /**
+   * How long each block took, in milliseconds, keyed by rubric key — every
+   * block that was attempted, whether it read or failed.
+   *
+   * Recorded because without it every question about a slow run is answered by
+   * inference from a status code. A block that fails on the bound and a block
+   * that finishes just inside it are one step apart and look identical in the
+   * record, and the difference decides whether the fix is more time or less
+   * work. Measured around the whole attempt sequence, so a block that was
+   * retried reports what the PM actually waited.
+   */
+  durationByBlock: Record<string, number>;
 }
 
 // ------------------------------------------------------------ verbatim guard
@@ -355,16 +367,28 @@ export async function extractFromTranscript(
   const blocks = deps.blocks ?? RUBRICS;
   const userMessage = buildExtractionUserMessage(input);
 
+  /**
+   * Timed around the whole attempt sequence rather than one request, and in a
+   * `finally` so a failed block reports its duration too — the failures are
+   * the ones worth timing, since "stopped at the bound" and "finished just
+   * inside it" are the two answers that decide what the fix is.
+   */
+  const durationByBlock: Record<string, number> = {};
   const settled = await Promise.allSettled(
-    blocks.map((rubric) =>
-      extractBlock(
-        provider,
-        rubric,
-        userMessage,
-        deps.tuning?.[rubric.key],
-        deps.retryBackoffMs ?? RETRY_BACKOFF_MS,
-      ),
-    ),
+    blocks.map(async (rubric) => {
+      const startedAt = Date.now();
+      try {
+        return await extractBlock(
+          provider,
+          rubric,
+          userMessage,
+          deps.tuning?.[rubric.key],
+          deps.retryBackoffMs ?? RETRY_BACKOFF_MS,
+        );
+      } finally {
+        durationByBlock[rubric.key] = Date.now() - startedAt;
+      }
+    }),
   );
 
   const merged: ExtractionOutput = { observations: [], claims: [] };
@@ -431,6 +455,7 @@ export async function extractFromTranscript(
     mergedByBlock: deduped.mergedByBlock,
     failedBlocks,
     succeededBlocks,
+    durationByBlock,
   };
 }
 
@@ -549,7 +574,12 @@ async function extractBlock(
 export function verifyDrafts(
   transcript: string,
   parsed: ExtractionOutput,
-): Omit<ExtractionResult, "failedBlocks" | "succeededBlocks" | "mergedByBlock"> {
+): Omit<
+  ExtractionResult,
+  // All four belong to the fan-out, which knows what it sent and how long each
+  // block took. Verification sees only the merged drafts.
+  "failedBlocks" | "succeededBlocks" | "mergedByBlock" | "durationByBlock"
+> {
   const observations: DraftObservation[] = [];
   const droppedQuotes: string[] = [];
   const droppedByBlock: ExtractionResult["droppedByBlock"] = {};

@@ -649,6 +649,39 @@ describe("API failures are reported, not thrown past the action layer", () => {
   });
 
   /**
+   * Timing exists to answer one question the rest of the record cannot: did the
+   * block stop on its bound, or finish comfortably inside it? So the failures
+   * are the ones that must carry a duration — a block that failed instantly and
+   * one cut off at the deadline are otherwise the same row.
+   */
+  it("times every block it attempted, failures included", async () => {
+    const failingKey = RUBRICS[2].key;
+    const client: ExtractionClient = {
+      messages: {
+        parse: async (params) => {
+          if ((params as { rubricKey?: string }).rubricKey === failingKey) {
+            throw Object.assign(new Error("nope"), { status: 401 });
+          }
+          return { parsed_output: output(), stop_reason: "end_turn" };
+        },
+      },
+    };
+
+    const r = await extractFromTranscript(
+      { transcript: TRANSCRIPT, callNumber: 1 },
+      { client, retryBackoffMs: NO_BACKOFF },
+    );
+
+    // Every block, read or failed — not just the ones that returned something.
+    expect(Object.keys(r.durationByBlock).sort()).toEqual(RUBRICS.map((b) => b.key).sort());
+    expect(r.failedBlocks.map((f) => f.rubricKey)).toEqual([failingKey]);
+    for (const key of Object.keys(r.durationByBlock)) {
+      expect(typeof r.durationByBlock[key], key).toBe("number");
+      expect(r.durationByBlock[key], key).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  /**
    * The one-click requirement, against the failure that actually breaks it.
    *
    * Gemini sheds a concurrent burst with 5xx, so five of six blocks came back

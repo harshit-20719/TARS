@@ -927,6 +927,7 @@ export async function runExtractionForCall(
               mergedSpans:
                 (result.mergedByBlock[rubricKey] ?? 0) + (crossMergedByBlock[rubricKey] ?? 0),
               configVersion: configVersions[rubricKey] ?? null,
+              durationMs: result.durationByBlock[rubricKey] ?? null,
             })),
             ...result.failedBlocks.map((f) => ({
               callId,
@@ -937,6 +938,12 @@ export async function runExtractionForCall(
                   : ("FAILED_RETRYABLE" as const),
               reason: f.reason,
               configVersion: configVersions[f.rubricKey] ?? null,
+              /**
+               * Timed on the failures too, and above all on these: a block that
+               * stopped on its bound and one that failed instantly read the same
+               * in every other column, and only the duration says which.
+               */
+              durationMs: result.durationByBlock[f.rubricKey] ?? null,
             })),
           ],
         });

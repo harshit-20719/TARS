@@ -250,7 +250,17 @@ function BlockRow({ rubricKey, run }: { rubricKey: string; run?: ExtractionBlock
           </ul>
         )}
       </td>
-      <td className="mono">{run.ranAt}</td>
+      <td className="mono">
+        {run.ranAt}
+        {/* The duration sits with the timestamp rather than in its own column:
+            it is read alongside the outcome, and only when a block is slow or
+            failing does anyone look. Absent on rows recorded before it was
+            measured, which is not the same as instant — so it renders nothing
+            rather than a zero. */}
+        {run.durationMs !== undefined && (
+          <div className="ctl-note">{(run.durationMs / 1000).toFixed(1)}s</div>
+        )}
+      </td>
     </tr>
   );
 }

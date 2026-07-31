@@ -6,6 +6,7 @@ import { ExtractionError, type ExtractionBlockRequest } from "../types";
 import {
   createGeminiProvider,
   DEFAULT_GEMINI_MODEL,
+  MAX_OUTPUT_TOKENS,
   type GeminiExtractionClient,
 } from "./gemini";
 
@@ -244,6 +245,19 @@ describe("the request build", () => {
   function configOf(calls: Record<string, unknown>[]): Record<string, unknown> {
     return calls[0].config as Record<string, unknown>;
   }
+
+  /**
+   * A ceiling on the answer is a ceiling on how long producing it takes, which
+   * is the binding constraint on a 60-second function. This side shipped with
+   * no cap while the Anthropic adapter had one from the start, so a block that
+   * enumerated generated until the deadline cut it off and returned nothing.
+   */
+  it("caps the output, so a block cannot generate until the deadline", async () => {
+    const { client, calls } = stub(cleanStop(EMPTY));
+    await createGeminiProvider({ client }).extractBlock(request());
+
+    expect(configOf(calls).maxOutputTokens).toBe(MAX_OUTPUT_TOKENS);
+  });
 
   it("sends structured output as responseJsonSchema with a real enum, closed objects, and no $schema", async () => {
     const { client, calls } = stub(cleanStop(EMPTY));

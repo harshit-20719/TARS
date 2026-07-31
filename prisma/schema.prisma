@@ -207,6 +207,13 @@ model ExtractionBlockRun {
   /// Which extraction-config version the run read with. Null until per-rubric
   /// config exists (U10).
   configVersion Int?
+  /// How long this block took, in milliseconds, across every attempt it was
+  /// given. Recorded because a block that stopped on its time bound and one
+  /// that finished just inside it are indistinguishable in the rest of this
+  /// row, and the difference is the whole answer to whether the fix is more
+  /// time or less work per block. Nullable: rows written before this column
+  /// existed have no honest value to backfill.
+  durationMs    Int?
   ranAt         DateTime @default(now())
 
   @@unique([callId, rubricKey])
