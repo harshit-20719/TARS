@@ -21,6 +21,7 @@ export function UserChip({
   email,
   role,
   canManageUsers = false,
+  canTuneExtraction = false,
 }: {
   name: string | null;
   email: string;
@@ -31,6 +32,13 @@ export function UserChip({
    * copies drift, and this component has no business knowing what ADMIN means.
    */
   canManageUsers?: boolean;
+  /**
+   * The same contract for the tuning page. Two booleans rather than one admin
+   * flag, because they are two permissions that happen to share a role today —
+   * folding them into one here is what would make separating them later a
+   * rewrite of this component.
+   */
+  canTuneExtraction?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
 
@@ -50,6 +58,11 @@ export function UserChip({
       {canManageUsers && (
         <Link className="ghostbtn" href="/admin/people">
           People
+        </Link>
+      )}
+      {canTuneExtraction && (
+        <Link className="ghostbtn" href="/admin/extraction">
+          Extraction
         </Link>
       )}
       <button

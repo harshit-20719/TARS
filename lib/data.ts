@@ -25,12 +25,14 @@ import { connection } from "next/server";
 import * as repo from "@/lib/repo/records";
 import type { ReassignCandidate } from "@/lib/repo/records";
 import {
+  latestDropCountsByRubric,
   listExtractionConfigs,
+  type RubricDropCount,
   type RubricExtractionConfig,
 } from "@/lib/repo/extractionConfig";
 import type { Call, Deal, DealRecord, Person } from "@/mock/types";
 
-export type { ReassignCandidate, RubricExtractionConfig };
+export type { ReassignCandidate, RubricDropCount, RubricExtractionConfig };
 
 /**
  * Every deal, or only the ones a given account holds (R7, KTD9).
@@ -117,4 +119,16 @@ export async function listReassignCandidates(): Promise<ReassignCandidate[]> {
 export const getExtractionConfigs = cache(async (): Promise<RubricExtractionConfig[]> => {
   await connection();
   return listExtractionConfigs();
+});
+
+/**
+ * What each rubric's last extraction dropped, for the same page (R20).
+ *
+ * Kept separate from the tuning read rather than folded into it: one is what an
+ * admin writes and the other is what the machine reported, and joining them
+ * here would make a page that only wants the text pay for the run history.
+ */
+export const getLatestDropCounts = cache(async (): Promise<RubricDropCount[]> => {
+  await connection();
+  return latestDropCountsByRubric();
 });

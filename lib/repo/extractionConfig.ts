@@ -77,3 +77,40 @@ export async function saveExtractionConfig(input: SaveExtractionConfig): Promise
     update: { persona, guidance, temperature, updatedById, version: { increment: 1 } },
   });
 }
+
+/** What the last run of one rubric dropped, and which text it ran under. */
+export interface RubricDropCount {
+  rubricKey: string;
+  droppedQuotes: number;
+  /** The tuning version that run carried. Null when it ran under defaults. */
+  configVersion: number | null;
+  ranAt: Date;
+}
+
+/**
+ * The most recent run of each rubric, across every call.
+ *
+ * This is the feedback number beside the temperature control (R20). It is
+ * reported per rubric because that is the grain an admin tunes at, and it
+ * carries the version it ran under because without that the number is not
+ * comparable to the text on the page — a drop count from before the last save
+ * says nothing about the words now in the box.
+ *
+ * One indexed read of the whole table, reduced in memory rather than six
+ * grouped queries: the table holds six rows per extracted call, so even a busy
+ * pilot deal set is small, and a per-rubric `findFirst` loop would be six round
+ * trips for the same answer.
+ */
+export async function latestDropCountsByRubric(): Promise<RubricDropCount[]> {
+  const rows = await db.extractionBlockRun.findMany({
+    orderBy: { ranAt: "desc" },
+    select: { rubricKey: true, droppedQuotes: true, configVersion: true, ranAt: true },
+  });
+
+  const latest = new Map<string, RubricDropCount>();
+  for (const row of rows) {
+    // Descending by time, so the first row seen for a rubric is its latest run.
+    if (!latest.has(row.rubricKey)) latest.set(row.rubricKey, row);
+  }
+  return RUBRICS.map(({ key }) => latest.get(key)).filter((r): r is RubricDropCount => Boolean(r));
+}

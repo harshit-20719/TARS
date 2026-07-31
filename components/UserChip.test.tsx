@@ -65,6 +65,31 @@ describe("UserChip", () => {
   });
 });
 
+describe("the extraction link", () => {
+  /**
+   * The same argument as the people link below, for the tuning page: it has no
+   * other entry point, and the two permissions are passed as separate booleans
+   * so a future split between them does not need this component rewritten.
+   */
+  it("offers a way to the tuning page when the actor may tune extraction", () => {
+    render(<UserChip name="Harshit" email="harshit@biome.in" role="ADMIN" canTuneExtraction />);
+    expect(screen.getByRole("link", { name: /extraction/i }).getAttribute("href")).toBe(
+      "/admin/extraction",
+    );
+  });
+
+  it("shows nothing to someone who may not", () => {
+    render(<UserChip name="Pilot PM" email="pm@biome.in" role="PM" />);
+    expect(screen.queryByRole("link", { name: /extraction/i })).toBeNull();
+  });
+
+  /** The flag decides, not the role — the same contract the people link keeps. */
+  it("shows nothing to an ADMIN whose flag was not passed", () => {
+    render(<UserChip name="Harshit" email="harshit@biome.in" role="ADMIN" />);
+    expect(screen.queryByRole("link", { name: /extraction/i })).toBeNull();
+  });
+});
+
 describe("the people link", () => {
   /**
    * /admin/people has no other entry point, so without this it is reachable only

@@ -31,6 +31,7 @@ import { CodecError } from "@/lib/domain/codec";
 import { ExtractionError } from "@/lib/extraction/types";
 import { FirefliesError, type MeetingPage } from "@/lib/fireflies/types";
 import * as capture from "@/lib/services/capture";
+import * as extractionConfig from "@/lib/services/extractionConfig";
 import * as importing from "@/lib/services/import";
 import * as judgment from "@/lib/services/judgment";
 import * as people from "@/lib/services/people";
@@ -529,6 +530,31 @@ export async function setRoleAction(userId: string, role: string): Promise<Actio
     const actor = await requireRole(Role.ADMIN);
     await people.setRole(actor, { userId, role });
     revalidatePath("/admin/people");
+    return { ok: true };
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/**
+ * Save one macro-dimension's extraction tuning (R17, R21).
+ *
+ * `requireRole(Role.ADMIN)` for the reason `setRoleAction` gives above, and the
+ * stakes are the same shape: what an admin saves here is read into every future
+ * run on every deal, so the author guard — which since U1 refuses nobody signed
+ * in — would have handed a PM the persona the machine reads by. The service
+ * asserts the tuning permission again, so only "the service was never reached"
+ * distinguishes a correct guard from a missing one.
+ *
+ * Revalidates the tuning page alone: no deal changed, and the saved text is on
+ * one page. The next extraction reads the new row from the database rather than
+ * from a cache, so nothing else needs invalidating.
+ */
+export async function saveRubricExtractionConfigAction(raw: unknown): Promise<ActionResult> {
+  try {
+    const actor = await requireRole(Role.ADMIN);
+    await extractionConfig.saveRubricExtractionConfig(actor, raw);
+    revalidatePath("/admin/extraction");
     return { ok: true };
   } catch (e) {
     return toResult(e);

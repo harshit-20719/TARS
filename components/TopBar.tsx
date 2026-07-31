@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { canManageUsers } from "@/lib/authz";
+import { canManageUsers, canTuneExtraction } from "@/lib/authz";
 import { currentActor } from "@/lib/session";
 import { ThemeToggle } from "./ThemeToggle";
 import { UserChip } from "./UserChip";
@@ -29,6 +29,7 @@ export async function TopBar() {
           email={actor.email}
           role={actor.role}
           canManageUsers={canManageUsers(actor.role)}
+          canTuneExtraction={canTuneExtraction(actor.role)}
         />
       )}
       <ThemeToggle />

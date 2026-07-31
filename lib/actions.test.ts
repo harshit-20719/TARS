@@ -40,6 +40,7 @@ const importFirefliesCall = vi.fn<(...a: unknown[]) => Promise<unknown>>(async (
   number: 2,
 }));
 const decideObservation = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
+const saveRubricExtractionConfig = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
 
 vi.mock("@/lib/auth", () => ({
   auth: async () => signedIn,
@@ -48,6 +49,10 @@ vi.mock("@/lib/auth", () => ({
 
 vi.mock("@/lib/services/people", () => ({
   setRole: (...a: unknown[]) => setRole(...a),
+}));
+
+vi.mock("@/lib/services/extractionConfig", () => ({
+  saveRubricExtractionConfig: (...a: unknown[]) => saveRubricExtractionConfig(...a),
 }));
 
 vi.mock("@/lib/services/import", () => ({
@@ -75,6 +80,7 @@ const {
   decideObservationAction,
   importFirefliesCallAction,
   listFirefliesMeetingsAction,
+  saveRubricExtractionConfigAction,
   setRoleAction,
 } = await import("./actions");
 
@@ -106,7 +112,10 @@ const signInAs = (role: Role) => {
   };
 };
 
-beforeEach(() => setRole.mockClear());
+beforeEach(() => {
+  setRole.mockClear();
+  saveRubricExtractionConfig.mockClear();
+});
 afterEach(() => {
   signedIn = null;
 });
@@ -175,6 +184,54 @@ describe("setRoleAction", () => {
     expect(setRole).toHaveBeenCalledWith(
       expect.objectContaining({ role: Role.ADMIN }),
       { userId: "someone", role: "PARTNER" },
+    );
+  });
+});
+
+/**
+ * The tuning guard (R21).
+ *
+ * Same shape as setRoleAction's, and for the same reason: the service asserts
+ * the permission again, so a wrong guard here is invisible in what the caller
+ * sees — both paths return a refusal. Only "the service was never reached"
+ * tells a correct guard from a missing one. The stakes are higher than a role
+ * change, in one respect: what this saves is read into every future run on
+ * every deal.
+ */
+describe("saveRubricExtractionConfigAction", () => {
+  const tuning = { rubricKey: "ft", persona: "", guidance: "", temperature: 0 };
+
+  it("refuses a PM and a PARTNER without reaching the service", async () => {
+    for (const role of [Role.PM, Role.PARTNER]) {
+      signInAs(role);
+
+      const result = await saveRubricExtractionConfigAction(tuning);
+
+      expect(result.ok, `${role} was let through`).toBe(false);
+      expect(saveRubricExtractionConfig, `${role} reached the service`).not.toHaveBeenCalled();
+    }
+  });
+
+  it("asks a signed-out caller to sign in again", async () => {
+    signedIn = null;
+
+    const result = await saveRubricExtractionConfigAction(tuning);
+
+    expect(result.ok === false && result.reauth).toBe(true);
+    expect(saveRubricExtractionConfig).not.toHaveBeenCalled();
+  });
+
+  it("lets an ADMIN through to the service", async () => {
+    signInAs(Role.ADMIN);
+
+    // Not awaited past the service call, for the reason given above: revalidation
+    // throws outside a request context. The write itself is covered against a
+    // real database in lib/services/extractionConfig.test.ts.
+    await saveRubricExtractionConfigAction(tuning).catch(() => {});
+
+    expect(saveRubricExtractionConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ role: Role.ADMIN }),
+      tuning,
     );
   });
 });
