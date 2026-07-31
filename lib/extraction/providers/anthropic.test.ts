@@ -305,7 +305,9 @@ describe("outcome mapping onto the failure taxonomy", () => {
    */
   it.each([
     ["a rate limit", { status: 429, error: {} }, "retryable", /rate limited/],
-    ["an outage", { status: 529, error: {} }, "retryable", /unavailable/],
+    // The 5xx wording names the status now: 500, 503 and 529 are different
+    // problems, and the number is what tells them apart.
+    ["an outage", { status: 529, error: {} }, "retryable", /returned 529/],
     ["a bad key", { status: 401, error: { error: { message: "invalid x-api-key" } } }, "terminal", /that API key is not valid/],
     ["an unknown model", { status: 404, error: {} }, "terminal", /check EXTRACTION_MODEL/],
     ["a dropped connection", { message: "fetch failed" }, "retryable", /could not reach the API/],

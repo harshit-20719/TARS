@@ -76,6 +76,39 @@ export {
 export type { ExtractionClient } from "./providers/anthropic";
 
 /**
+ * How many times one block may be sent inside its own time bound.
+ *
+ * This is the orchestrator's number, and it is not the same knob as
+ * `BLOCK_RETRIES`, which stays 0: the adapters make exactly one HTTP call per
+ * attempt and neither SDK runs a retry loop of its own (R5). The distinction
+ * matters because an SDK-level retry hides inside one `await` and can overrun
+ * the block bound, whereas an attempt counted here is bounded by the deadline
+ * in `extractBlock`.
+ *
+ * Three, because the failure this exists for arrives in bursts: all six blocks
+ * are sent at once, and a provider shedding load sheds most of the burst. Two
+ * attempts recover the common case and a third covers a shed retry, while the
+ * deadline means none of it can cost more wall clock than one attempt already
+ * did.
+ */
+export const BLOCK_ATTEMPTS = 3;
+
+/**
+ * Base backoff before attempt n+1, in milliseconds. Each is jittered up to
+ * double at the call site, so six blocks retrying together spread out instead
+ * of re-arriving as the same burst that was just rejected.
+ */
+export const RETRY_BACKOFF_MS = [300, 900] as const;
+
+/**
+ * How much of the budget must survive a backoff for another attempt to be worth
+ * starting. Below this the request would almost certainly be cut off by the
+ * deadline mid-flight — spending an input charge to produce a timeout instead
+ * of the real reason the block failed.
+ */
+export const MIN_ATTEMPT_HEADROOM_MS = 5_000;
+
+/**
  * The reduced form of a provider failure: what happened, said in no provider's
  * vocabulary. HTTP statuses carry across providers; the two pseudo-statuses
  * cover the failures that arrive without one. `"timeout"` is the model still
@@ -170,7 +203,17 @@ export function describeApiFailure(
       break;
   }
   if (typeof status === "number" && status >= 500) {
-    return `the API is unavailable right now — the transcript is saved, so try again.${ref}`;
+    /**
+     * The status number and the API's own words both ride along, and neither is
+     * optional. This branch used to drop `said` — alone among the branches — so
+     * a 5xx read as four words with nothing behind them. That is the branch a
+     * real Gemini deployment lands on most often, and it left the one person
+     * who could act with nothing to act on: 500, 503 and 529 are different
+     * problems (an internal fault, a shed request, a provider-wide overload)
+     * with different levers, and Google names which one it is in the message we
+     * were collecting and discarding.
+     */
+    return `the API returned ${status} — the transcript is saved, so try again.${said}${ref}`;
   }
   // No status: a connection failure, or something the SDK threw before sending.
   const raw = messages.length ? ` ${messages.join("; ")}` : "";
@@ -284,6 +327,13 @@ export async function extractFromTranscript(
     blocks?: readonly Rubric[];
     /** Keyed by rubric key. Absent entries read under the defaults. */
     tuning?: Readonly<Record<string, BlockTuning>>;
+    /**
+     * Backoffs between a block's attempts. A test seam, not a setting: the real
+     * waits are what make the retry work against a provider shedding load, and
+     * a suite that sits through them pays seconds per retryable case for no
+     * added coverage. Tests pass zeroes; nothing in the app passes anything.
+     */
+    retryBackoffMs?: readonly number[];
   } = {},
 ): Promise<ExtractionResult> {
   if (!input.transcript.trim()) {
@@ -306,7 +356,15 @@ export async function extractFromTranscript(
   const userMessage = buildExtractionUserMessage(input);
 
   const settled = await Promise.allSettled(
-    blocks.map((rubric) => extractBlock(provider, rubric, userMessage, deps.tuning?.[rubric.key])),
+    blocks.map((rubric) =>
+      extractBlock(
+        provider,
+        rubric,
+        userMessage,
+        deps.tuning?.[rubric.key],
+        deps.retryBackoffMs ?? RETRY_BACKOFF_MS,
+      ),
+    ),
   );
 
   const merged: ExtractionOutput = { observations: [], claims: [] };
@@ -388,26 +446,90 @@ async function extractBlock(
   rubric: Rubric,
   userMessage: string,
   tuning: BlockTuning | undefined,
+  backoffs: readonly number[],
 ): Promise<ExtractionOutput> {
-  let parsed: z.infer<ReturnType<typeof outputSchemaFor>>;
-  try {
-    parsed = await provider.extractBlock({
-      rubricKey: rubric.key,
-      system: systemPromptFor(rubric, tuning ?? {}),
-      user: userMessage,
-      schema: outputSchemaFor(rubric),
-      timeoutMs: BLOCK_TIMEOUT_MS,
-      ...(tuning?.temperature !== undefined ? { temperature: tuning.temperature } : {}),
-    });
-  } catch (e) {
+  let parsed: z.infer<ReturnType<typeof outputSchemaFor>> | undefined;
+
+  /**
+   * The block's whole budget, spent across however many attempts fit inside it.
+   *
+   * R5 keeps retries off at the *provider* layer, and that stays true — the
+   * adapters still make exactly one HTTP call each and neither SDK is allowed
+   * its own retry loop. What R5 was protecting is that a block's time bound
+   * bounds the block, and the deadline here is what actually enforces that:
+   * every attempt is given only the time still left, so two attempts cost the
+   * same wall clock as one did. The 60-second function ceiling never sees a
+   * difference.
+   *
+   * The reason to retry at all is that R5 was reasoned about timeouts, where a
+   * second attempt costs another full block bound and cannot fit. A 5xx is the
+   * opposite shape: Gemini sheds a request in well under a second, so retrying
+   * costs almost nothing and is the difference between one click and three. The
+   * deadline tells the two cases apart without naming either — a timeout has
+   * already spent the budget, so the loop exits on its own.
+   */
+  const deadline = Date.now() + BLOCK_TIMEOUT_MS;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < BLOCK_ATTEMPTS; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    try {
+      parsed = await provider.extractBlock({
+        rubricKey: rubric.key,
+        system: systemPromptFor(rubric, tuning ?? {}),
+        user: userMessage,
+        schema: outputSchemaFor(rubric),
+        timeoutMs: remaining,
+        ...(tuning?.temperature !== undefined ? { temperature: tuning.temperature } : {}),
+      });
+      lastError = undefined;
+      break;
+    } catch (e) {
+      lastError = e;
+      /**
+       * Only a retryable class is worth a second press, and only when what is
+       * left of the budget could actually hold one. A filing failure is the
+       * model's answer not fitting the schema and a terminal one is a refusal —
+       * both are deterministic, so re-asking spends another full input charge
+       * to be told the same thing.
+       *
+       * Jittered, because six blocks fail together and six identical backoffs
+       * would re-send them as one burst — the shape that got them shed in the
+       * first place.
+       */
+      const retryable = e instanceof ExtractionError && e.kind === "retryable";
+      const backoff = backoffs[attempt] ?? 0;
+      const wait = backoff + Math.floor(Math.random() * backoff);
+      if (!retryable || attempt === BLOCK_ATTEMPTS - 1) break;
+      if (deadline - Date.now() - wait < MIN_ATTEMPT_HEADROOM_MS) break;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+
+  if (lastError !== undefined) {
     // The label prefix belongs to the fan-out, not the adapter: the adapter
     // reads one block and does not know its human name. The kind carries.
-    if (e instanceof ExtractionError) {
-      throw new ExtractionError(`${rubric.label}: ${e.message}`, e.kind);
+    if (lastError instanceof ExtractionError) {
+      throw new ExtractionError(`${rubric.label}: ${lastError.message}`, lastError.kind);
     }
     throw new ExtractionError(
-      `${rubric.label}: ${String((e as Error)?.message ?? e)}`,
+      `${rubric.label}: ${String((lastError as Error)?.message ?? lastError)}`,
       "unknown",
+    );
+  }
+  /**
+   * Unreachable while the deadline is set from a positive budget, and it throws
+   * rather than defaulting because of what the alternative would mean. An empty
+   * result here is indistinguishable from a clean read of a block with nothing
+   * in it, and a clean read is what licenses the re-run to delete the previous
+   * run's rows for this block (KTD5). Defaulting would hand that delete a block
+   * that was never sent.
+   */
+  if (parsed === undefined) {
+    throw new ExtractionError(
+      `${rubric.label}: the block's time budget was spent before a request was sent.`,
+      "retryable",
     );
   }
 

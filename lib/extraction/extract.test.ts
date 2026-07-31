@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 import {
+  BLOCK_ATTEMPTS,
   BLOCK_TIMEOUT_MS,
   ExtractionError,
   extractFromTranscript,
@@ -49,6 +50,13 @@ const obs = (o: Partial<ExtractionOutput["observations"][number]>) => ({
  * itself it uses the real RUBRICS.
  */
 const ONE_BLOCK = RUBRICS[0];
+
+/**
+ * Retry without the waiting. The backoffs are real in the app — they are what
+ * spreads six blocks that were shed together — but a suite that sits through
+ * them buys no coverage for the seconds it spends.
+ */
+const NO_BACKOFF = [0, 0] as const;
 
 /**
  * `opts` is recorded alongside `calls` because the request options are where the
@@ -561,7 +569,7 @@ describe("API failures are reported, not thrown past the action layer", () => {
     ["a forbidden key", { status: 403, error: {} }, /not permitted/],
     ["too large a transcript", { status: 413, error: {} }, /too large/],
     ["a rate limit", { status: 429, error: {} }, /rate limited/],
-    ["an outage", { status: 529, error: {} }, /unavailable/],
+    ["an outage", { status: 529, error: {} }, /returned 529/],
     ["a dropped connection", { message: "fetch failed" }, /could not reach the API/],
     /**
      * Detected by the shape a timed-out SDK call throws — read structurally, so
@@ -574,10 +582,16 @@ describe("API failures are reported, not thrown past the action layer", () => {
 
   it.each(cases)("reports %s as an ExtractionError", async (_label, thrown, expected) => {
     await expect(
-      extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client: failing(thrown) }),
+      extractFromTranscript(
+        { transcript: TRANSCRIPT, callNumber: 1 },
+        { client: failing(thrown), retryBackoffMs: NO_BACKOFF },
+      ),
     ).rejects.toThrow(ExtractionError);
     await expect(
-      extractFromTranscript({ transcript: TRANSCRIPT, callNumber: 1 }, { client: failing(thrown) }),
+      extractFromTranscript(
+        { transcript: TRANSCRIPT, callNumber: 1 },
+        { client: failing(thrown), retryBackoffMs: NO_BACKOFF },
+      ),
     ).rejects.toThrow(expected);
   });
 
@@ -620,7 +634,7 @@ describe("API failures are reported, not thrown past the action layer", () => {
     const kindOf = async (thrown: unknown) =>
       extractFromTranscript(
         { transcript: TRANSCRIPT, callNumber: 1 },
-        { client: failing(thrown), blocks: [ONE_BLOCK] },
+        { client: failing(thrown), blocks: [ONE_BLOCK], retryBackoffMs: NO_BACKOFF },
       ).then(
         () => "clean",
         (e: ExtractionError) => e.kind,
@@ -635,6 +649,95 @@ describe("API failures are reported, not thrown past the action layer", () => {
   });
 
   /**
+   * The one-click requirement, against the failure that actually breaks it.
+   *
+   * Gemini sheds a concurrent burst with 5xx, so five of six blocks came back
+   * unread on a real run and only a second and third press filled them in. A
+   * shed request fails in well under a second, so a retry fits inside the
+   * block's existing bound — which is why this is the orchestrator's business
+   * and not a relaxation of R5: the adapters still make one HTTP call each.
+   */
+  it("recovers a block that the provider shed, without a second press", async () => {
+    let attempts = 0;
+    const shedsOnce: ExtractionClient = {
+      messages: {
+        parse: async () => {
+          attempts++;
+          if (attempts === 1) {
+            throw Object.assign(new Error("The model is overloaded."), { status: 503 });
+          }
+          return { parsed_output: output(), stop_reason: "end_turn" };
+        },
+      },
+    };
+
+    const r = await extractFromTranscript(
+      { transcript: TRANSCRIPT, callNumber: 1 },
+      { client: shedsOnce, blocks: [ONE_BLOCK], retryBackoffMs: NO_BACKOFF },
+    );
+
+    expect(attempts).toBe(2);
+    expect(r.failedBlocks).toHaveLength(0);
+    expect(r.succeededBlocks).toEqual([ONE_BLOCK.key]);
+  });
+
+  /**
+   * The counterpart, and the more important half: a deterministic failure must
+   * not be re-sent. Every attempt spends another full input charge to be told
+   * the same thing, and a terminal failure is defined as one that fails
+   * identically on every press (KTD6).
+   */
+  it("never re-sends a terminal or filing failure", async () => {
+    const countAttempts = async (thrown: unknown) => {
+      let attempts = 0;
+      const client: ExtractionClient = {
+        messages: {
+          parse: async () => {
+            attempts++;
+            throw thrown;
+          },
+        },
+      };
+      await extractFromTranscript(
+        { transcript: TRANSCRIPT, callNumber: 1 },
+        { client, blocks: [ONE_BLOCK], retryBackoffMs: NO_BACKOFF },
+      ).catch(() => undefined);
+      return attempts;
+    };
+
+    // A bad key and an unknown model are terminal: one attempt each.
+    expect(await countAttempts({ status: 401, error: {} })).toBe(1);
+    expect(await countAttempts({ status: 404, error: {} })).toBe(1);
+    // A schema violation is the model's filing, equally deterministic.
+    const zodViolation = z.object({ q: z.string() }).safeParse({});
+    expect(await countAttempts((zodViolation as { error?: unknown }).error)).toBe(1);
+  });
+
+  /**
+   * A block that exhausts its attempts still fails, and still fails with the
+   * provider's reason rather than something the retry loop invented. Bounded at
+   * BLOCK_ATTEMPTS so a persistent outage cannot multiply the bill.
+   */
+  it("stops at the attempt bound and keeps the provider's reason", async () => {
+    let attempts = 0;
+    const alwaysSheds: ExtractionClient = {
+      messages: {
+        parse: async () => {
+          attempts++;
+          throw Object.assign(new Error("The model is overloaded."), { status: 503 });
+        },
+      },
+    };
+
+    const r = extractFromTranscript(
+      { transcript: TRANSCRIPT, callNumber: 1 },
+      { client: alwaysSheds, blocks: [ONE_BLOCK], retryBackoffMs: NO_BACKOFF },
+    );
+    await expect(r).rejects.toThrow(/returned 503/);
+    expect(attempts).toBe(BLOCK_ATTEMPTS);
+  });
+
+  /**
    * The neutral signature (mirroring describeFirefliesFailure): a status that
    * is a number, null, or a pseudo-status, so no provider's exception shape is
    * needed to render a failure. One readable sentence per case.
@@ -645,8 +748,24 @@ describe("API failures are reported, not thrown past the action layer", () => {
     expect(describeApiFailure(400)).toMatch(/rejected the request/);
     expect(describeApiFailure(401)).toMatch(/that API key is not valid/);
     expect(describeApiFailure(429)).toMatch(/rate limited/);
-    expect(describeApiFailure(500)).toMatch(/unavailable/);
-    expect(describeApiFailure(529)).toMatch(/unavailable/);
+    // The 5xx wording now names the status rather than saying "unavailable":
+    // 500, 503 and 529 are an internal fault, a shed request, and a
+    // provider-wide overload, and only the number tells them apart.
+    expect(describeApiFailure(500)).toMatch(/returned 500/);
+    expect(describeApiFailure(529)).toMatch(/returned 529/);
+  });
+
+  /**
+   * Every other status branch passes the API's own explanation through; this
+   * one used to drop it, and it is the branch a Gemini deployment lands on most
+   * often. A 5xx that says only "the API is unavailable" leaves the one person
+   * who could act on it with nothing — Google names the actual cause in the
+   * text we were already collecting.
+   */
+  it("passes the API's own words through on a 5xx", () => {
+    const message = describeApiFailure(503, ["The model is overloaded. Please try again later."]);
+    expect(message).toMatch(/returned 503/);
+    expect(message).toContain("The model is overloaded");
   });
 
   it("never puts the key in the message", () => {
