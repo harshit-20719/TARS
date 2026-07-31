@@ -6,6 +6,7 @@ import { ExtractionError, type ExtractionBlockRequest } from "../types";
 import {
   createGeminiProvider,
   DEFAULT_GEMINI_MODEL,
+  DEFAULT_TEMPERATURE,
   MAX_OUTPUT_TOKENS,
   type GeminiExtractionClient,
 } from "./gemini";
@@ -252,6 +253,32 @@ describe("the request build", () => {
    * no cap while the Anthropic adapter had one from the start, so a block that
    * enumerated generated until the deadline cut it off and returned nothing.
    */
+  /**
+   * Greedy decoding has no escape from a repetition loop, and constrained
+   * decoding against an array schema is where that bites: a real run had every
+   * block generating filings until the clock stopped it, all six landing within
+   * four hundred milliseconds of each other. Zero is what made the loop
+   * inescapable, so zero is what must not be the default.
+   */
+  it("does not decode greedily by default", async () => {
+    const { client, calls } = stub(cleanStop(EMPTY));
+    await createGeminiProvider({ client }).extractBlock(request());
+
+    expect(configOf(calls).temperature).toBe(DEFAULT_TEMPERATURE);
+    expect(configOf(calls).temperature).toBeGreaterThan(0);
+    // Still near-reproducible, which is what the zero was protecting, and
+    // inside the admin cap (KTD13) rather than a knob beside it.
+    expect(configOf(calls).temperature as number).toBeLessThanOrEqual(0.4);
+  });
+
+  it("still sends a tuned temperature ahead of the default", async () => {
+    const { client, calls } = stub(cleanStop(EMPTY));
+    await createGeminiProvider({ client }).extractBlock(request({ temperature: 0 }));
+    // An explicit zero is an admin's choice and must survive — the default
+    // applies only where nobody has tuned one.
+    expect(configOf(calls).temperature).toBe(0);
+  });
+
   it("caps the output, so a block cannot generate until the deadline", async () => {
     const { client, calls } = stub(cleanStop(EMPTY));
     await createGeminiProvider({ client }).extractBlock(request());
@@ -267,6 +294,22 @@ describe("the request build", () => {
     expect(config.responseMimeType).toBe("application/json");
     const schema = config.responseJsonSchema as Record<string, unknown>;
     expect(schema).toEqual(geminiResponseJsonSchemaFor(BLOCK));
+
+    /**
+     * Both arrays are bounded. Constrained decoding satisfies this schema token
+     * by token, so with no maxItems "another observation" stays a legal next
+     * token forever and nothing ever requires the array to close — which is how
+     * six blocks all ran to the clock within four hundred milliseconds of each
+     * other, one of them reporting MAX_TOKENS. The bound is the stopping
+     * condition the grammar was missing.
+     */
+    const props = schema.properties as Record<string, Record<string, unknown>>;
+    for (const key of ["observations", "claims"]) {
+      expect(props[key].maxItems, key).toBe(BLOCK.subs.length * 4);
+    }
+    // Generous against an honest answer: a full block runs nearer ten filings
+    // than twenty-eight, so the cap binds on a loop and never on a real read.
+    expect(props.observations.maxItems as number).toBeGreaterThan(BLOCK.subs.length);
 
     const observation = (
       (schema.properties as Record<string, Record<string, unknown>>).observations
@@ -351,7 +394,7 @@ describe("the request build", () => {
     expect(configOf(calls).httpOptions).toEqual({ timeout: 12_345 });
   });
 
-  it("passes a supplied temperature through, and sends 0 when none is supplied", async () => {
+  it("passes a supplied temperature through, and sends the default when none is", async () => {
     const tuned = stub(cleanStop(EMPTY));
     await createGeminiProvider({ client: tuned.client }).extractBlock(
       request({ temperature: 0.4 }),
@@ -360,8 +403,12 @@ describe("the request build", () => {
 
     const plain = stub(cleanStop(EMPTY));
     await createGeminiProvider({ client: plain.client }).extractBlock(request());
-    // Determinism by default: 0, explicitly, not the provider's own default.
-    expect((plain.calls[0].config as Record<string, unknown>).temperature).toBe(0);
+    // Explicit, never the provider's own — but no longer zero. Greedy decoding
+    // is what let a block generate filings until the clock stopped it; see
+    // "does not decode greedily by default" above.
+    expect((plain.calls[0].config as Record<string, unknown>).temperature).toBe(
+      DEFAULT_TEMPERATURE,
+    );
   });
 
   it("defaults the model but honours EXTRACTION_MODEL", async () => {

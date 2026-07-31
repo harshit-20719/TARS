@@ -144,11 +144,33 @@ export function geminiResponseJsonSchemaFor(rubric: Rubric): Record<string, unkn
     propertyOrdering: ["text", "anchorQuote", "originTag"],
   };
 
+  /**
+   * A ceiling on how many filings one block may return — and the reason it
+   * exists is not tidiness, it is that an unbounded array has no stopping
+   * condition.
+   *
+   * Constrained decoding forces the model's output to satisfy this schema
+   * token by token. With no `maxItems`, "another observation" is always a
+   * legal next token, so nothing in the grammar ever requires the array to
+   * close; the model emitted filings until the output cap or the clock stopped
+   * it. That is what a real run looked like: six blocks finishing at 38.6,
+   * 38.8, 38.6, 38.7, 38.9 and 39.0 seconds against a forty-second bound —
+   * a four-hundred-millisecond spread across blocks whose prompts differ by
+   * half — and the one that got there first reporting MAX_TOKENS. Six
+   * different readings do not take the same time; six runaways do.
+   *
+   * Four per row is a bound, not a target. A block of seven rows may return
+   * twenty-eight filings where a full one runs closer to ten, so the cap never
+   * binds on an honest answer and always binds on a loop.
+   */
+  const maxItems = rubric.subs.length * 4;
+
   return {
     type: "object",
     properties: {
-      observations: { type: "array", items: observation },
-      claims: { type: "array", items: claim },
+      observations: { type: "array", items: observation, maxItems },
+      // Claims anchor to observations, so they cannot honestly outnumber them.
+      claims: { type: "array", items: claim, maxItems },
     },
     required: ["observations", "claims"],
     additionalProperties: false,

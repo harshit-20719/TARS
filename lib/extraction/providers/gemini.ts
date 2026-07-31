@@ -82,18 +82,29 @@ export function geminiThinkingConfigFor(model: string): Record<string, unknown> 
 }
 
 /**
+ * The ceiling on one block's answer. Matches the Anthropic adapter's
+ * `max_tokens`, because it is sized to the same job rather than to a provider.
+ */
+export const MAX_OUTPUT_TOKENS = 8000;
+
+/**
+ * The sampling temperature when nobody has tuned one.
+ *
+ * Not zero, which is greedy decoding and has no escape from a repetition loop
+ * — see the note at the call site. Low enough that the same transcript still
+ * yields substantially the same filings, which is what the zero was protecting.
+ * The floor of the admin's range rather than a separate knob: a per-rubric
+ * value overrides it and the 0.4 cap (KTD13) still applies above it.
+ */
+export const DEFAULT_TEMPERATURE = 0.2;
+
+/**
  * All four harm categories off. The transcripts name real founders and
  * discuss real financials, which default thresholds intermittently block —
  * and a blocked call here is a PM's evidence not written. CIVIC_INTEGRITY is
  * deprecated and must not be sent; modelArmorConfig is mutually exclusive
  * with safetySettings and is not sent either.
  */
-/**
- * The ceiling on one block's answer. Matches the Anthropic adapter's
- * `max_tokens`, because it is sized to the same job rather than to a provider.
- */
-export const MAX_OUTPUT_TOKENS = 8000;
-
 const SAFETY_OFF = [
   { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
   { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
@@ -243,9 +254,25 @@ export function createGeminiProvider(
       contents: [{ role: "user", parts: [{ text: request.user }] }],
       config: {
         systemInstruction: request.system,
-        // Determinism by default: 0 explicitly, never the provider's default.
-        // Gemini accepts temperature on every family — nothing dropped (KTD12).
-        temperature: request.temperature ?? 0,
+        /**
+         * Explicit, never the provider's default — but no longer zero.
+         *
+         * Zero is greedy decoding: the highest-probability token every time,
+         * with no way out of a loop it has entered. Combined with constrained
+         * decoding against an array schema, that is the documented recipe for
+         * degenerate repetition, and it is what a real run produced — every
+         * block generating filings until the clock or the token cap stopped it.
+         * The Anthropic path never showed this because its 5-series models
+         * refuse a temperature at all (KTD12) and so ran at the provider's own,
+         * and because its structured output was never enforced on the wire
+         * (KTD8) — so neither half of the combination was present.
+         *
+         * Low enough to stay near-reproducible, which is what the zero was for:
+         * the same transcript still yields substantially the same filings. An
+         * admin's per-rubric value still overrides it, still capped at 0.4
+         * (KTD13), so this is the floor of that range rather than a new knob.
+         */
+        temperature: request.temperature ?? DEFAULT_TEMPERATURE,
         responseMimeType: "application/json",
         /**
          * responseJsonSchema, NOT responseSchema: the deprecated field
