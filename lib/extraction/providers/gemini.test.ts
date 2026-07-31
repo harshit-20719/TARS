@@ -419,4 +419,30 @@ describe("SDK failures, classified onto the taxonomy", () => {
     await expect(r).rejects.toThrow(ExtractionError);
     await expect(r).rejects.toMatchObject({ kind });
   });
+
+  /**
+   * The failure a real deployment actually hit, and the one most likely to be
+   * read wrong. The SDK sends `httpOptions.timeout` on as an `X-Server-Timeout`
+   * header, so Google enforces this deployment's own block bound and answers
+   * 504 DEADLINE_EXCEEDED. Rendered as an outage it tells the operator the API
+   * is down and offers no lever; rendered as the timeout it is, it names the
+   * bound and points at the model.
+   */
+  it("reads a 504 as this deployment's own bound, not as an outage", async () => {
+    const thrown = {
+      status: 504,
+      message: '{"error":{"code":504,"message":"The request timed out.","status":"DEADLINE_EXCEEDED"}}',
+    };
+    const r = createGeminiProvider({ client: failing(thrown) }).extractBlock(request());
+
+    const message = await r.then(
+      () => "",
+      (e: Error) => e.message,
+    );
+    expect(message).toMatch(/did not finish this block within \d+ seconds/);
+    expect(message).toMatch(/EXTRACTION_MODEL/);
+    // It must not read as a fault on Google's side, which is what sends an
+    // operator to check a status page instead of the one setting that moves.
+    expect(message).not.toMatch(/returned 504/);
+  });
 });

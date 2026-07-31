@@ -114,6 +114,25 @@ function failureKindFor(status: ApiFailureStatus): ExtractionFailureKind {
  */
 function classifyApiFailure(e: unknown): { status: ApiFailureStatus; messages: string[] } {
   const err = e as { status?: number; name?: string; message?: string };
+  /**
+   * A 504 here is this deployment's own block bound, not an outage.
+   *
+   * The SDK turns `httpOptions.timeout` into an `X-Server-Timeout` header in
+   * seconds (node/index.mjs, buildHeaders), so Google enforces our deadline on
+   * its side and answers `504 DEADLINE_EXCEEDED` rather than letting the socket
+   * hang. Left in the numeric branch it renders as "the API returned 504 — try
+   * again", which blames Google for a limit we set and names no lever; read as
+   * the timeout pseudo-status it says the model did not finish inside the bound
+   * and points at EXTRACTION_MODEL, which is the thing that would actually
+   * change the outcome.
+   *
+   * Gemini-only on purpose. The Anthropic adapter sends no such header, so a
+   * 504 reaching it really is a gateway between here and there, and each
+   * adapter owns its own outcome mapping.
+   */
+  if (err?.status === 504) {
+    return { status: "timeout", messages: err.message ? [err.message] : [] };
+  }
   if (typeof err?.status === "number") {
     return { status: err.status, messages: err.message ? [err.message] : [] };
   }
