@@ -8,6 +8,7 @@ import {
   DEFAULT_GEMINI_MODEL,
   DEFAULT_TEMPERATURE,
   MAX_OUTPUT_TOKENS,
+  MIN_TEMPERATURE,
   type GeminiExtractionClient,
 } from "./gemini";
 
@@ -273,10 +274,26 @@ describe("the request build", () => {
 
   it("still sends a tuned temperature ahead of the default", async () => {
     const { client, calls } = stub(cleanStop(EMPTY));
+    await createGeminiProvider({ client }).extractBlock(request({ temperature: 0.3 }));
+    expect(configOf(calls).temperature).toBe(0.3);
+  });
+
+  /**
+   * The bug this closes, stated as a test.
+   *
+   * A default only applies when nobody supplies a value, and the config read
+   * always supplies one: an untuned rubric synthesized `temperature: 0`, the
+   * fan-out forwarded it because 0 is not undefined, and `?? DEFAULT` never
+   * fired because 0 is not nullish. Every request went out greedy while the
+   * code read as though it had a non-greedy default. A clamp cannot be routed
+   * around that way.
+   */
+  it("clamps a zero temperature off greedy, whatever supplied it", async () => {
+    const { client, calls } = stub(cleanStop(EMPTY));
     await createGeminiProvider({ client }).extractBlock(request({ temperature: 0 }));
-    // An explicit zero is an admin's choice and must survive — the default
-    // applies only where nobody has tuned one.
-    expect(configOf(calls).temperature).toBe(0);
+
+    expect(configOf(calls).temperature).toBe(MIN_TEMPERATURE);
+    expect(configOf(calls).temperature as number).toBeGreaterThan(0);
   });
 
   it("caps the output, so a block cannot generate until the deadline", async () => {

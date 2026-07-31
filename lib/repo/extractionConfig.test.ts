@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { RUBRICS } from "@/framework/rubrics";
 import { db } from "@/lib/db";
+import { DEFAULT_EXTRACTION_TEMPERATURE } from "@/lib/extraction/types";
 import { listExtractionConfigs, saveExtractionConfig } from "./extractionConfig";
 
 /**
@@ -38,7 +39,10 @@ describe("reading configuration with no rows", () => {
         rubricKey: config.rubricKey,
         persona: "",
         guidance: "",
-        temperature: 0,
+        // The real default, never 0. Zero is greedy decoding, and this
+        // synthesized shape is what fed it to every untuned run while the
+        // adapter's own default sat unreachable behind a nullish check.
+        temperature: DEFAULT_EXTRACTION_TEMPERATURE,
         version: null,
       });
     }
@@ -98,7 +102,15 @@ describe("a mixed table — some rubrics tuned, some never touched", () => {
       version: 1,
     });
     for (const config of configs.filter((c) => c.rubricKey !== "fl")) {
-      expect(config).toMatchObject({ persona: "", guidance: "", temperature: 0, version: null });
+      // Not zero: the synthesized "nothing saved" shape must name the real
+      // default, or the admin page shows one number while the model reads with
+      // another — which is exactly how greedy decoding shipped unnoticed.
+      expect(config).toMatchObject({
+        persona: "",
+        guidance: "",
+        temperature: DEFAULT_EXTRACTION_TEMPERATURE,
+        version: null,
+      });
     }
   });
 });

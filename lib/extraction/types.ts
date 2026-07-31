@@ -107,6 +107,19 @@ export class ExtractionError extends Error {
  * row" — which is a clerical question, never a judgment about the founder.
  * Kept to two levels so it cannot drift into being a score by another name.
  */
+/**
+ * The sampling temperature an untuned run reads with.
+ *
+ * Here rather than in an adapter because two modules must agree on it: the
+ * config read synthesizes it for a rubric nobody has tuned, and the provider
+ * falls back to it when no value arrives. They disagreed once — the read
+ * synthesized 0 while the adapter believed its own non-zero default applied —
+ * and the result was every request decoding greedily with nothing in the code
+ * saying so. The port is the one place both sides can import without one
+ * depending on the other.
+ */
+export const DEFAULT_EXTRACTION_TEMPERATURE = 0.2;
+
 export const CONFIDENCE = ["high", "low"] as const;
 export type Confidence = (typeof CONFIDENCE)[number];
 

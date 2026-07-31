@@ -424,7 +424,7 @@ model RubricExtractionConfig {
   rubricKey   String @unique
   persona     String @default("")
   guidance    String @default("")
-  temperature Float  @default(0)
+  temperature Float  @default(0.2)
   version     Int    @default(1)
 
   updatedById String?

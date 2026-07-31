@@ -24,6 +24,7 @@ import { GoogleGenAI } from "@google/genai";
 import { rubricByKey } from "@/framework";
 import { geminiResponseJsonSchemaFor } from "../schema";
 import {
+  DEFAULT_EXTRACTION_TEMPERATURE,
   ExtractionError,
   type ExtractionBlockRequest,
   type ExtractionProvider,
@@ -96,7 +97,26 @@ export const MAX_OUTPUT_TOKENS = 8000;
  * The floor of the admin's range rather than a separate knob: a per-rubric
  * value overrides it and the 0.4 cap (KTD13) still applies above it.
  */
-export const DEFAULT_TEMPERATURE = 0.2;
+export const DEFAULT_TEMPERATURE = DEFAULT_EXTRACTION_TEMPERATURE;
+
+/**
+ * The floor, clamped rather than defaulted — and the difference is the whole
+ * bug this closes.
+ *
+ * A default only applies when nobody supplied a value, and something always
+ * does: with no tuning saved, the config read synthesizes `temperature: 0` as
+ * its "nothing here" shape, the fan-out forwards it because 0 is not
+ * undefined, and `?? DEFAULT_TEMPERATURE` never fires because 0 is not
+ * nullish. Every request went out greedy while the code read as though it had
+ * a non-greedy default.
+ *
+ * Greedy decoding is not a mild setting here. It is the one that cannot leave
+ * a repetition loop, and a loop is what makes a block generate until its time
+ * bound. A clamp holds whatever the stored value is: an admin can tune within
+ * the range, and no path — a synthesized default, an old row, a future caller
+ * — can put this back to zero.
+ */
+export const MIN_TEMPERATURE = 0.1;
 
 /**
  * All four harm categories off. The transcripts name real founders and
@@ -272,7 +292,7 @@ export function createGeminiProvider(
          * admin's per-rubric value still overrides it, still capped at 0.4
          * (KTD13), so this is the floor of that range rather than a new knob.
          */
-        temperature: request.temperature ?? DEFAULT_TEMPERATURE,
+        temperature: Math.max(request.temperature ?? DEFAULT_TEMPERATURE, MIN_TEMPERATURE),
         responseMimeType: "application/json",
         /**
          * responseJsonSchema, NOT responseSchema: the deprecated field

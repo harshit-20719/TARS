@@ -16,6 +16,7 @@
 
 import { RUBRICS } from "@/framework/rubrics";
 import { db } from "@/lib/db";
+import { DEFAULT_EXTRACTION_TEMPERATURE } from "@/lib/extraction/types";
 
 /** One rubric's tuning as the rest of the app sees it — a plain record, no Prisma. */
 export interface RubricExtractionConfig {
@@ -47,7 +48,19 @@ export async function listExtractionConfigs(): Promise<RubricExtractionConfig[]>
           temperature: row.temperature,
           version: row.version,
         }
-      : { rubricKey: key, persona: "", guidance: "", temperature: 0, version: null };
+      : {
+          rubricKey: key,
+          persona: "",
+          guidance: "",
+          /**
+           * The real default, not zero. Zero is greedy decoding, and this
+           * synthesized shape is what supplied it to every untuned run — the
+           * adapter's own default could never fire, because a value was always
+           * present. The page and the model must agree on what "untuned" means.
+           */
+          temperature: DEFAULT_EXTRACTION_TEMPERATURE,
+          version: null,
+        };
   });
 }
 
